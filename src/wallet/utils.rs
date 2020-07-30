@@ -1,4 +1,25 @@
+use std::collections::HashSet;
+
+use bitcoin::util::bip32::ChildNumber;
+use bitcoin::Address;
+
 use miniscript::{MiniscriptKey, Satisfier};
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum AddressTypes {
+    Pkh,
+    ShWpkh,
+    Wpkh,
+    Sh,
+    ShWsh,
+    Wsh,
+}
+
+pub trait AddressViewer {
+    fn supported_types(&self) -> HashSet<AddressTypes>;
+
+    fn show_address(&self, child: ChildNumber, address: &Address) -> bool;
+}
 
 // De-facto standard "dust limit" (even though it should change based on the output type)
 const DUST_LIMIT_SATOSHI: u64 = 546;

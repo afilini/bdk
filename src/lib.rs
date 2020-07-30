@@ -31,6 +31,9 @@ pub extern crate sled;
 #[cfg(feature = "cli-utils")]
 pub mod cli;
 
+#[cfg(feature = "hardware-wallets")]
+pub mod hardware_wallets;
+
 #[macro_use]
 pub mod error;
 pub mod blockchain;

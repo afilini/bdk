@@ -19,13 +19,16 @@ use log::{debug, error, info, trace};
 
 pub mod utils;
 
-use self::utils::{After, IsDust, Older};
+use self::utils::{AddressViewer, After, IsDust, Older};
 use crate::blockchain::{noop_progress, Blockchain, OfflineBlockchain, OnlineBlockchain};
 use crate::database::{BatchDatabase, BatchOperations, DatabaseUtils};
 use crate::descriptor::{get_checksum, DescriptorMeta, DescriptorScripts, ExtractPolicy, Policy};
 use crate::error::Error;
 use crate::psbt::PSBTUtils;
 use crate::types::*;
+
+#[cfg(feature = "hardware-wallets")]
+use crate::hardware_wallets;
 
 pub type OfflineWallet<D> = Wallet<OfflineBlockchain, D>;
 
@@ -37,6 +40,8 @@ pub struct Wallet<B: Blockchain, D: BatchDatabase> {
     network: Network,
 
     current_height: Option<u32>,
+
+    address_viewers: Vec<Box<dyn AddressViewer>>,
 
     client: RefCell<B>,
     database: RefCell<D>,
@@ -81,6 +86,25 @@ where
             None => None,
         };
 
+        let mut address_viewers = vec![];
+
+        #[cfg(feature = "hardware-wallets")]
+        for (_, (fingerprint, _)) in descriptor.get_hd_keypaths(0)?.into_iter().chain(
+            change_descriptor
+                .as_ref()
+                .map(|d| d.get_hd_keypaths(0))
+                .transpose()?
+                .unwrap_or(BTreeMap::new()),
+        ) {
+            if signers.find(fingerprint.into()).is_none() {
+                if let Some(device) = hardware_wallets::get_device(fingerprint)? {
+                    info!("Found HWI device for: {}", device.fingerprint);
+
+                    signers.add_external(fingerprint.into(), Box::new(device));
+                }
+            }
+        }
+
         Ok(Wallet {
             descriptor,
             change_descriptor,
@@ -89,6 +113,8 @@ where
             network,
 
             current_height: None,
+
+            address_viewers,
 
             client: RefCell::new(B::offline()),
             database: RefCell::new(database),
@@ -102,10 +128,23 @@ where
             .increment_last_index(ScriptType::External)?;
         // TODO: refill the address pool if index is close to the last cached addr
 
-        self.descriptor
-            .derive(&[ChildNumber::from_normal_idx(index)?])
+        let child_number = ChildNumber::from_normal_idx(index)?;
+
+        let address = self
+            .descriptor
+            .derive(&[child_number])
             .address(self.network)
-            .ok_or(Error::ScriptDoesntHaveAddressForm)
+            .ok_or(Error::ScriptDoesntHaveAddressForm)?;
+
+        if !self
+            .address_viewers
+            .iter()
+            .all(|viewer| viewer.show_address(child_number, &address))
+        {
+            Err(Error::UserRejectedAddress)
+        } else {
+            Ok(address)
+        }
     }
 
     pub fn is_mine(&self, script: &Script) -> Result<bool, Error> {

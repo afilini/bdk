@@ -27,6 +27,8 @@ pub enum Error {
     InputMissingWitnessScript(usize),
     MissingUTXO,
 
+    UserRejectedAddress,
+
     // Blockchain interface errors
     Uncapable(crate::blockchain::Capability),
     OfflineClient,
@@ -51,6 +53,8 @@ pub enum Error {
     Esplora(crate::blockchain::esplora::EsploraError),
     #[cfg(feature = "key-value-db")]
     Sled(sled::Error),
+    #[cfg(feature = "hardware-wallets")]
+    HWI(hwi::error::Error),
 }
 
 macro_rules! impl_error {
@@ -83,3 +87,5 @@ impl_error!(electrum_client::Error, Electrum);
 impl_error!(crate::blockchain::esplora::EsploraError, Esplora);
 #[cfg(feature = "key-value-db")]
 impl_error!(sled::Error, Sled);
+#[cfg(feature = "hardware-wallets")]
+impl_error!(hwi::error::Error, HWI);
