@@ -1,15 +1,11 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::convert::{Into, TryFrom};
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use bitcoin::hashes::{hash160, Hash};
-use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey, Fingerprint};
-use bitcoin::util::psbt::PartiallySignedTransaction as PSBT;
-use bitcoin::{PrivateKey, PublicKey, Script};
+use bitcoin::hashes::hash160;
+use bitcoin::secp256k1::Secp256k1;
+use bitcoin::util::bip32::{ChildNumber, DerivationPath, Fingerprint};
+use bitcoin::{PublicKey, Script};
 
 use miniscript::descriptor::DescriptorKey;
 use miniscript::signer::SignersContainer;
@@ -17,22 +13,14 @@ pub use miniscript::{
     Descriptor, Legacy, Miniscript, MiniscriptKey, ScriptContext, Segwitv0, Terminal,
 };
 
-use serde::{Deserialize, Serialize};
-
-use crate::psbt::utils::PSBTUtils;
-
 pub mod checksum;
 pub mod error;
-pub mod extended_key;
-mod keys;
 pub mod policy;
 
 pub use self::checksum::get_checksum;
-use self::error::Error;
-pub use self::extended_key::{DerivationIndex, DescriptorExtendedKey};
 pub use self::policy::Policy;
 
-use self::keys::Key;
+use self::error::Error;
 
 pub trait ExtractPolicy {
     fn extract_policy(
@@ -65,9 +53,6 @@ impl miniscript::MiniscriptKey for DummyKey {
         DummyKey::default()
     }
 }
-
-pub type DerivedDescriptor = Descriptor<PublicKey>;
-pub type StringDescriptor = Descriptor<String>;
 
 pub trait DescriptorMeta {
     fn is_witness(&self) -> bool;
@@ -179,302 +164,6 @@ impl DescriptorMeta for Descriptor<DescriptorKey> {
         self.translate_pk(translatefpk, translatefpkh).unwrap();
 
         !found_wildcard
-    }
-}
-
-#[serde(try_from = "&str", into = "String")]
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ExtendedDescriptor {
-    #[serde(flatten)]
-    internal: StringDescriptor,
-
-    #[serde(skip)]
-    keys: BTreeMap<String, Box<dyn Key>>,
-
-    #[serde(skip)]
-    ctx: Secp256k1<All>,
-}
-
-impl fmt::Display for ExtendedDescriptor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.internal)
-    }
-}
-
-impl std::clone::Clone for ExtendedDescriptor {
-    fn clone(&self) -> Self {
-        Self {
-            internal: self.internal.clone(),
-            ctx: self.ctx.clone(),
-            keys: BTreeMap::new(),
-        }
-    }
-}
-
-impl std::convert::AsRef<StringDescriptor> for ExtendedDescriptor {
-    fn as_ref(&self) -> &StringDescriptor {
-        &self.internal
-    }
-}
-
-impl ExtendedDescriptor {
-    fn parse_string(string: &str) -> Result<(String, Box<dyn Key>), Error> {
-        if let Ok(pk) = PublicKey::from_str(string) {
-            return Ok((string.to_string(), Box::new(pk)));
-        } else if let Ok(sk) = PrivateKey::from_wif(string) {
-            return Ok((string.to_string(), Box::new(sk)));
-        } else if let Ok(ext_key) = DescriptorExtendedKey::from_str(string) {
-            return Ok((string.to_string(), Box::new(ext_key)));
-        }
-
-        return Err(Error::KeyParsingError(string.to_string()));
-    }
-
-    fn new(sd: StringDescriptor) -> Result<Self, Error> {
-        let ctx = Secp256k1::gen_new();
-        let keys: RefCell<BTreeMap<String, Box<dyn Key>>> = RefCell::new(BTreeMap::new());
-
-        let translatefpk = |string: &String| -> Result<_, Error> {
-            let (key, parsed) = Self::parse_string(string)?;
-            keys.borrow_mut().insert(key, parsed);
-
-            Ok(DummyKey::default())
-        };
-        let translatefpkh = |string: &String| -> Result<_, Error> {
-            let (key, parsed) = Self::parse_string(string)?;
-            keys.borrow_mut().insert(key, parsed);
-
-            Ok(DummyKey::default())
-        };
-
-        sd.translate_pk(translatefpk, translatefpkh)?;
-
-        Ok(ExtendedDescriptor {
-            internal: sd,
-            keys: keys.into_inner(),
-            ctx,
-        })
-    }
-
-    pub fn derive_with_miniscript_legacy(
-        &self,
-        miniscript: Miniscript<PublicKey, Legacy>,
-    ) -> Result<DerivedDescriptor, Error> {
-        let derived_desc = match self.internal {
-            Descriptor::Bare(_) => Descriptor::Bare(miniscript),
-            Descriptor::Sh(_) => Descriptor::Sh(miniscript),
-            _ => return Err(Error::CantDeriveWithMiniscript),
-        };
-
-        // if !self.same_structure(&derived_desc) {
-        //     Err(Error::CantDeriveWithMiniscript)
-        // } else {
-        Ok(derived_desc)
-        // }
-    }
-
-    pub fn derive_with_miniscript_segwit_v0(
-        &self,
-        miniscript: Miniscript<PublicKey, Segwitv0>,
-    ) -> Result<DerivedDescriptor, Error> {
-        let derived_desc = match self.internal {
-            Descriptor::Wsh(_) => Descriptor::Wsh(miniscript),
-            Descriptor::ShWsh(_) => Descriptor::ShWsh(miniscript),
-            _ => return Err(Error::CantDeriveWithMiniscript),
-        };
-
-        // if !self.same_structure(&derived_desc) {
-        //     Err(Error::CantDeriveWithMiniscript)
-        // } else {
-        Ok(derived_desc)
-        // }
-    }
-
-    pub fn derive_from_psbt_input(
-        &self,
-        psbt: &PSBT,
-        input_index: usize,
-    ) -> Result<DerivedDescriptor, Error> {
-        let get_pk_from_partial_sigs = || {
-            // here we need the public key.. since it's a single sig, there are only two
-            // options: we can either find it in the `partial_sigs`, or we can't. if we
-            // can't, it means that we can't even satisfy the input, so we can exit knowing
-            // that we did our best to try to find it.
-            psbt.inputs[input_index]
-                .partial_sigs
-                .keys()
-                .nth(0)
-                .ok_or(Error::MissingPublicKey)
-        };
-
-        if let Some(wit_script) = &psbt.inputs[input_index].witness_script {
-            self.derive_with_miniscript_segwit_v0(Miniscript::parse(wit_script)?)
-        } else if let Some(p2sh_script) = &psbt.inputs[input_index].redeem_script {
-            if p2sh_script.is_v0_p2wpkh() {
-                // wrapped p2wpkh
-                get_pk_from_partial_sigs().map(|pk| Descriptor::ShWpkh(*pk))
-            } else {
-                self.derive_with_miniscript_legacy(Miniscript::parse(p2sh_script)?)
-            }
-        } else if let Some(utxo) = psbt.get_utxo_for(input_index) {
-            if utxo.script_pubkey.is_p2pkh() {
-                get_pk_from_partial_sigs().map(|pk| Descriptor::Pkh(*pk))
-            } else if utxo.script_pubkey.is_p2pk() {
-                get_pk_from_partial_sigs().map(|pk| Descriptor::Pk(*pk))
-            } else if utxo.script_pubkey.is_v0_p2wpkh() {
-                get_pk_from_partial_sigs().map(|pk| Descriptor::Wpkh(*pk))
-            } else {
-                // try as bare script
-                self.derive_with_miniscript_legacy(Miniscript::parse(&utxo.script_pubkey)?)
-            }
-        } else {
-            Err(Error::MissingDetails)
-        }
-    }
-
-    pub fn derive(&self, index: u32) -> Result<DerivedDescriptor, Error> {
-        let translatefpk = |xpub: &String| {
-            self.keys
-                .get(xpub)
-                .unwrap()
-                .as_public_key(&self.ctx, Some(index))
-        };
-        let translatefpkh =
-            |xpub: &String| Ok(hash160::Hash::hash(&translatefpk(xpub)?.to_bytes()));
-
-        Ok(self.internal.translate_pk(translatefpk, translatefpkh)?)
-    }
-
-    pub fn get_xprv(&self) -> impl IntoIterator<Item = ExtendedPrivKey> + '_ {
-        self.keys
-            .iter()
-            .filter(|(_, v)| v.xprv().is_some())
-            .map(|(_, v)| v.xprv().unwrap())
-    }
-
-    pub fn get_secret_keys(&self) -> impl IntoIterator<Item = PrivateKey> + '_ {
-        self.keys
-            .iter()
-            .filter(|(_, v)| v.as_secret_key().is_some())
-            .map(|(_, v)| v.as_secret_key().unwrap())
-    }
-
-    pub fn get_hd_keypaths(
-        &self,
-        index: u32,
-    ) -> Result<BTreeMap<PublicKey, (Fingerprint, DerivationPath)>, Error> {
-        let mut answer = BTreeMap::new();
-
-        for (_, key) in &self.keys {
-            if let Some(fingerprint) = key.fingerprint(&self.ctx) {
-                let derivation_path = key.full_path(index).unwrap();
-                let pubkey = key.as_public_key(&self.ctx, Some(index))?;
-
-                answer.insert(pubkey, (fingerprint, derivation_path));
-            }
-        }
-
-        Ok(answer)
-    }
-
-    pub fn max_satisfaction_weight(&self) -> usize {
-        let fake_pk = PublicKey::from_slice(&[
-            2, 140, 40, 169, 123, 248, 41, 139, 192, 210, 61, 140, 116, 148, 82, 163, 46, 105, 75,
-            101, 227, 10, 148, 114, 163, 149, 74, 179, 15, 229, 50, 76, 170,
-        ])
-        .unwrap();
-        let translated: Descriptor<PublicKey> = self
-            .internal
-            .translate_pk(
-                |_| -> Result<_, ()> { Ok(fake_pk.clone()) },
-                |_| -> Result<_, ()> { Ok(Default::default()) },
-            )
-            .unwrap();
-
-        translated.max_satisfaction_weight()
-    }
-
-    pub fn is_fixed(&self) -> bool {
-        self.keys.iter().all(|(_, key)| key.is_fixed())
-    }
-
-    pub fn same_structure<K: MiniscriptKey>(&self, other: &Descriptor<K>) -> bool {
-        // Translate all the public keys to () and then check if the two descriptors are equal.
-        // TODO: translate hashes to their default value before checking for ==
-
-        let func_string = |_string: &String| -> Result<_, Error> { Ok(DummyKey::default()) };
-
-        let func_generic_pk = |_data: &K| -> Result<_, Error> { Ok(DummyKey::default()) };
-        let func_generic_pkh =
-            |_data: &<K as MiniscriptKey>::Hash| -> Result<_, Error> { Ok(DummyKey::default()) };
-
-        let translated_a = self.internal.translate_pk(func_string, func_string);
-        let translated_b = other.translate_pk(func_generic_pk, func_generic_pkh);
-
-        match (translated_a, translated_b) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        }
-    }
-
-    pub fn as_public_version(&self) -> Result<ExtendedDescriptor, Error> {
-        let keys: RefCell<BTreeMap<String, Box<dyn Key>>> = RefCell::new(BTreeMap::new());
-
-        let translatefpk = |string: &String| -> Result<_, Error> {
-            let public = self.keys.get(string).unwrap().public(&self.ctx)?;
-
-            let result = format!("{}", public);
-            keys.borrow_mut().insert(string.clone(), public);
-
-            Ok(result)
-        };
-        let translatefpkh = |string: &String| -> Result<_, Error> {
-            let public = self.keys.get(string).unwrap().public(&self.ctx)?;
-
-            let result = format!("{}", public);
-            keys.borrow_mut().insert(string.clone(), public);
-
-            Ok(result)
-        };
-
-        let internal = self.internal.translate_pk(translatefpk, translatefpkh)?;
-
-        Ok(ExtendedDescriptor {
-            internal,
-            keys: keys.into_inner(),
-            ctx: self.ctx.clone(),
-        })
-    }
-}
-
-impl TryFrom<&str> for ExtendedDescriptor {
-    type Error = Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let internal = StringDescriptor::from_str(value)?;
-        ExtendedDescriptor::new(internal)
-    }
-}
-
-impl TryFrom<StringDescriptor> for ExtendedDescriptor {
-    type Error = Error;
-
-    fn try_from(other: StringDescriptor) -> Result<Self, Self::Error> {
-        ExtendedDescriptor::new(other)
-    }
-}
-
-impl FromStr for ExtendedDescriptor {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s)
-    }
-}
-
-impl Into<String> for ExtendedDescriptor {
-    fn into(self) -> String {
-        format!("{}", self.internal)
     }
 }
 

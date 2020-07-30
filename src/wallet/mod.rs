@@ -24,7 +24,7 @@ use crate::blockchain::{noop_progress, Blockchain, OfflineBlockchain, OnlineBloc
 use crate::database::{BatchDatabase, BatchOperations, DatabaseUtils};
 use crate::descriptor::{get_checksum, DescriptorMeta, DescriptorScripts, ExtractPolicy, Policy};
 use crate::error::Error;
-use crate::psbt::utils::PSBTUtils;
+use crate::psbt::PSBTUtils;
 use crate::types::*;
 
 pub type OfflineWallet<D> = Wallet<OfflineBlockchain, D>;

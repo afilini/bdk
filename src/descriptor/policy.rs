@@ -19,7 +19,6 @@ use log::{debug, error, info, trace};
 use super::checksum::get_checksum;
 use super::error::Error;
 use crate::descriptor::ExtractPolicy;
-use crate::psbt::PSBTSatisfier;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct PKOrF {
@@ -486,15 +485,6 @@ impl Policy {
         policy.contribution = contribution;
 
         Ok(Some(policy))
-    }
-
-    pub fn satisfy<Ctx: ScriptContext>(
-        &mut self,
-        _satisfier: &PSBTSatisfier,
-        _desc_node: &Terminal<PublicKey, Ctx>,
-    ) {
-        //self.satisfaction = self.item.satisfy(satisfier, desc_node);
-        //self.contribution += &self.satisfaction;
     }
 
     pub fn requires_path(&self) -> bool {

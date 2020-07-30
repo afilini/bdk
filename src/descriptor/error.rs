@@ -1,20 +1,8 @@
 #[derive(Debug)]
 pub enum Error {
-    InternalError,
-    InvalidPrefix(Vec<u8>),
-    HardenedDerivationOnXpub,
-    MalformedInput,
-    KeyParsingError(String),
-
     Policy(crate::descriptor::policy::PolicyError),
 
-    InputIndexDoesntExist,
-    MissingPublicKey,
-    MissingDetails,
-
     InvalidDescriptorCharacter(char),
-
-    CantDeriveWithMiniscript,
 
     BIP32(bitcoin::util::bip32::Error),
     Base58(bitcoin::util::base58::Error),
