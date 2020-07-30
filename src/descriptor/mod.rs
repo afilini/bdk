@@ -3,13 +3,16 @@ use std::collections::BTreeMap;
 use std::convert::{Into, TryFrom};
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use bitcoin::hashes::{hash160, Hash};
 use bitcoin::secp256k1::{All, Secp256k1};
-use bitcoin::util::bip32::{DerivationPath, ExtendedPrivKey, Fingerprint};
+use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey, Fingerprint};
 use bitcoin::util::psbt::PartiallySignedTransaction as PSBT;
 use bitcoin::{PrivateKey, PublicKey, Script};
 
+use miniscript::descriptor::DescriptorKey;
+use miniscript::signer::SignersContainer;
 pub use miniscript::{
     Descriptor, Legacy, Miniscript, MiniscriptKey, ScriptContext, Segwitv0, Terminal,
 };
@@ -31,15 +34,11 @@ pub use self::policy::Policy;
 
 use self::keys::Key;
 
-trait MiniscriptExtractPolicy {
+pub trait ExtractPolicy {
     fn extract_policy(
         &self,
-        lookup_map: &BTreeMap<String, Box<dyn Key>>,
+        signers: Arc<SignersContainer<DescriptorKey>>,
     ) -> Result<Option<Policy>, Error>;
-}
-
-pub trait ExtractPolicy {
-    fn extract_policy(&self) -> Result<Option<Policy>, Error>;
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, PartialOrd, Eq, Ord, Default)]
@@ -72,26 +71,22 @@ pub type StringDescriptor = Descriptor<String>;
 
 pub trait DescriptorMeta {
     fn is_witness(&self) -> bool;
+    fn get_hd_keypaths(
+        &self,
+        index: u32,
+    ) -> Result<BTreeMap<PublicKey, (Fingerprint, DerivationPath)>, Error>;
+    fn is_fixed(&self) -> bool;
+}
+
+pub trait DescriptorScripts {
     fn psbt_redeem_script(&self) -> Option<Script>;
     fn psbt_witness_script(&self) -> Option<Script>;
 }
 
-impl<T> DescriptorMeta for Descriptor<T>
+impl<T> DescriptorScripts for Descriptor<T>
 where
     T: miniscript::MiniscriptKey + miniscript::ToPublicKey,
 {
-    fn is_witness(&self) -> bool {
-        match self {
-            Descriptor::Bare(_) | Descriptor::Pk(_) | Descriptor::Pkh(_) | Descriptor::Sh(_) => {
-                false
-            }
-            Descriptor::Wpkh(_)
-            | Descriptor::ShWpkh(_)
-            | Descriptor::Wsh(_)
-            | Descriptor::ShWsh(_) => true,
-        }
-    }
-
     fn psbt_redeem_script(&self) -> Option<Script> {
         match self {
             Descriptor::ShWpkh(_) => Some(self.witness_script()),
@@ -107,6 +102,83 @@ where
             Descriptor::ShWsh(ref script) => Some(script.encode()),
             _ => None,
         }
+    }
+}
+
+impl DescriptorMeta for Descriptor<DescriptorKey> {
+    fn is_witness(&self) -> bool {
+        match self {
+            Descriptor::Bare(_) | Descriptor::Pk(_) | Descriptor::Pkh(_) | Descriptor::Sh(_) => {
+                false
+            }
+            Descriptor::Wpkh(_)
+            | Descriptor::ShWpkh(_)
+            | Descriptor::Wsh(_)
+            | Descriptor::ShWsh(_) => true,
+        }
+    }
+
+    fn get_hd_keypaths(
+        &self,
+        index: u32,
+    ) -> Result<BTreeMap<PublicKey, (Fingerprint, DerivationPath)>, Error> {
+        let mut answer = BTreeMap::new();
+
+        let translatefpk = |key: &DescriptorKey| -> Result<_, Error> {
+            match key {
+                DescriptorKey::PubKey(_) => {}
+                DescriptorKey::XPub(xpub) => {
+                    let derive_path = if xpub.is_wildcard {
+                        xpub.derivation_path
+                            .into_iter()
+                            .chain([ChildNumber::from_normal_idx(index)?].iter())
+                            .cloned()
+                            .collect()
+                    } else {
+                        xpub.derivation_path.clone()
+                    };
+
+                    let derived_pubkey = xpub.xkey.derive_pub(&Secp256k1::new(), &derive_path)?;
+
+                    answer.insert(
+                        derived_pubkey.public_key,
+                        (
+                            xpub.root_fingerprint(),
+                            xpub.full_path(&[ChildNumber::from_normal_idx(index)?]),
+                        ),
+                    );
+                }
+            }
+
+            Ok(DummyKey::default())
+        };
+        let translatefpkh = |_: &hash160::Hash| -> Result<_, Error> { Ok(DummyKey::default()) };
+
+        self.translate_pk(translatefpk, translatefpkh).unwrap();
+
+        Ok(answer)
+    }
+
+    fn is_fixed(&self) -> bool {
+        let mut found_wildcard = false;
+
+        let translatefpk = |key: &DescriptorKey| -> Result<_, Error> {
+            match key {
+                DescriptorKey::PubKey(_) => {}
+                DescriptorKey::XPub(xpub) => {
+                    if xpub.is_wildcard {
+                        found_wildcard = true;
+                    }
+                }
+            }
+
+            Ok(DummyKey::default())
+        };
+        let translatefpkh = |_: &hash160::Hash| -> Result<_, Error> { Ok(DummyKey::default()) };
+
+        self.translate_pk(translatefpk, translatefpkh).unwrap();
+
+        !found_wildcard
     }
 }
 
@@ -372,12 +444,6 @@ impl ExtendedDescriptor {
             keys: keys.into_inner(),
             ctx: self.ctx.clone(),
         })
-    }
-}
-
-impl ExtractPolicy for ExtendedDescriptor {
-    fn extract_policy(&self) -> Result<Option<Policy>, Error> {
-        self.internal.extract_policy(&self.keys)
     }
 }
 

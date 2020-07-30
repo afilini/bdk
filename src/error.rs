@@ -38,6 +38,7 @@ pub enum Error {
     Descriptor(crate::descriptor::error::Error),
 
     Encode(bitcoin::consensus::encode::Error),
+    Miniscript(miniscript::Error),
     BIP32(bitcoin::util::bip32::Error),
     Secp256k1(bitcoin::secp256k1::Error),
     JSON(serde_json::Error),
@@ -69,6 +70,7 @@ impl_error!(
 );
 
 impl_error!(bitcoin::consensus::encode::Error, Encode);
+impl_error!(miniscript::Error, Miniscript);
 impl_error!(bitcoin::util::bip32::Error, BIP32);
 impl_error!(bitcoin::secp256k1::Error, Secp256k1);
 impl_error!(serde_json::Error, JSON);

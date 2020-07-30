@@ -2,37 +2,38 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::ops::DerefMut;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use bitcoin::blockdata::opcodes;
-use bitcoin::blockdata::script::Builder;
 use bitcoin::consensus::encode::serialize;
+use bitcoin::util::bip32::ChildNumber;
 use bitcoin::util::psbt::PartiallySignedTransaction as PSBT;
-use bitcoin::{
-    Address, Network, OutPoint, PublicKey, Script, SigHashType, Transaction, TxIn, TxOut, Txid,
-};
+use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxIn, TxOut, Txid};
 
-use miniscript::BitcoinSig;
+use miniscript::descriptor::{DescriptorKey, DescriptorKeyWithSecrets};
+use miniscript::signer::{DescriptorWithSigners, PSBTSigningContext, SignersContainer};
+use miniscript::Descriptor;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
 
 pub mod utils;
 
-use self::utils::IsDust;
+use self::utils::{After, IsDust, Older};
 use crate::blockchain::{noop_progress, Blockchain, OfflineBlockchain, OnlineBlockchain};
 use crate::database::{BatchDatabase, BatchOperations, DatabaseUtils};
-use crate::descriptor::{get_checksum, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, Policy};
+use crate::descriptor::{get_checksum, DescriptorMeta, DescriptorScripts, ExtractPolicy, Policy};
 use crate::error::Error;
-use crate::psbt::{utils::PSBTUtils, PSBTSatisfier, PSBTSigner};
-use crate::signer::Signer;
+use crate::psbt::utils::PSBTUtils;
 use crate::types::*;
 
 pub type OfflineWallet<D> = Wallet<OfflineBlockchain, D>;
 
 pub struct Wallet<B: Blockchain, D: BatchDatabase> {
-    descriptor: ExtendedDescriptor,
-    change_descriptor: Option<ExtendedDescriptor>,
+    descriptor: Descriptor<DescriptorKey>,
+    change_descriptor: Option<Descriptor<DescriptorKey>>,
+    signers: Arc<SignersContainer<DescriptorKey>>,
+
     network: Network,
 
     current_height: Option<u32>,
@@ -57,7 +58,11 @@ where
             ScriptType::External,
             get_checksum(descriptor)?.as_bytes(),
         )?;
-        let descriptor = ExtendedDescriptor::from_str(descriptor)?;
+        let DescriptorWithSigners {
+            descriptor,
+            mut signers,
+        } = DescriptorWithSigners::<DescriptorKeyWithSecrets>::from_str(descriptor)?;
+
         let change_descriptor = match change_descriptor {
             Some(desc) => {
                 database.check_descriptor_checksum(
@@ -65,12 +70,13 @@ where
                     get_checksum(desc)?.as_bytes(),
                 )?;
 
-                let parsed = ExtendedDescriptor::from_str(desc)?;
-                if !parsed.same_structure(descriptor.as_ref()) {
-                    return Err(Error::DifferentDescriptorStructure);
-                }
+                let DescriptorWithSigners {
+                    descriptor: change_descriptor,
+                    signers: change_signers,
+                } = DescriptorWithSigners::<DescriptorKeyWithSecrets>::from_str(desc)?;
+                signers.merge(change_signers).unwrap();
 
-                Some(parsed)
+                Some(change_descriptor)
             }
             None => None,
         };
@@ -78,6 +84,8 @@ where
         Ok(Wallet {
             descriptor,
             change_descriptor,
+            signers: Arc::new(signers),
+
             network,
 
             current_height: None,
@@ -95,7 +103,7 @@ where
         // TODO: refill the address pool if index is close to the last cached addr
 
         self.descriptor
-            .derive(index)?
+            .derive(&[ChildNumber::from_normal_idx(index)?])
             .address(self.network)
             .ok_or(Error::ScriptDoesntHaveAddressForm)
     }
@@ -129,7 +137,10 @@ where
         utxos: Option<Vec<OutPoint>>,
         unspendable: Option<Vec<OutPoint>>,
     ) -> Result<(PSBT, TransactionDetails), Error> {
-        let policy = self.descriptor.extract_policy()?.unwrap();
+        let policy = self
+            .descriptor
+            .extract_policy(Arc::clone(&self.signers))?
+            .unwrap();
         if policy.requires_path() && policy_path.is_none() {
             return Err(Error::SpendingPolicyRequired);
         }
@@ -199,6 +210,7 @@ where
         } else {
             0xFFFFFFFF
         };
+
         inputs.iter_mut().for_each(|i| i.sequence = n_sequence);
         tx.input.append(&mut inputs);
 
@@ -252,9 +264,9 @@ where
             .zip(paths.into_iter())
             .zip(psbt.global.unsigned_tx.input.iter())
         {
-            let desc = self.get_descriptor_for(script_type);
+            let desc = self.get_descriptor_for_script_type(script_type);
             psbt_input.hd_keypaths = desc.get_hd_keypaths(child).unwrap();
-            let derived_descriptor = desc.derive(child).unwrap();
+            let derived_descriptor = desc.derive(&[ChildNumber::from_normal_idx(child)?]);
 
             // TODO: figure out what do redeem_script and witness_script mean
             psbt_input.redeem_script = derived_descriptor.psbt_redeem_script();
@@ -287,14 +299,14 @@ where
                 .borrow()
                 .get_path_from_script_pubkey(&tx_output.script_pubkey)?
             {
-                let desc = self.get_descriptor_for(script_type);
+                let desc = self.get_descriptor_for_script_type(script_type);
                 psbt_output.hd_keypaths = desc.get_hd_keypaths(child)?;
             }
         }
 
         let transaction_details = TransactionDetails {
             transaction: None,
-            txid: txid,
+            txid,
             timestamp: Self::get_timestamp(),
             received,
             sent: outgoing,
@@ -304,144 +316,40 @@ where
         Ok((psbt, transaction_details))
     }
 
-    // TODO: define an enum for signing errors
     pub fn sign(&self, mut psbt: PSBT, assume_height: Option<u32>) -> Result<(PSBT, bool), Error> {
         // this helps us doing our job later
         self.add_hd_keypaths(&mut psbt)?;
 
-        let tx = &psbt.global.unsigned_tx;
+        let mut tx = psbt.global.unsigned_tx.clone();
 
-        let mut signer = PSBTSigner::from_descriptor(&psbt.global.unsigned_tx, &self.descriptor)?;
-        if let Some(desc) = &self.change_descriptor {
-            let change_signer = PSBTSigner::from_descriptor(&psbt.global.unsigned_tx, desc)?;
-            signer.extend(change_signer)?;
-        }
-
-        // sign everything we can. TODO: ideally we should only sign with the keys in the policy
-        // path selected, if present
-        for (i, input) in psbt.inputs.iter_mut().enumerate() {
-            let sighash = input.sighash_type.unwrap_or(SigHashType::All);
-            let prevout = tx.input[i].previous_output;
-
-            let mut partial_sigs = BTreeMap::new();
+        for (n, input) in tx.input.iter_mut().enumerate() {
+            let desc = match psbt
+                .get_utxo_for(n)
+                .map(|txout| self.get_descriptor_for_txout(&txout))
+                .transpose()?
+                .flatten()
             {
-                let mut push_sig = |pubkey: &PublicKey, opt_sig: Option<BitcoinSig>| {
-                    if let Some((signature, sighash)) = opt_sig {
-                        let mut concat_sig = Vec::new();
-                        concat_sig.extend_from_slice(&signature.serialize_der());
-                        concat_sig.extend_from_slice(&[sighash as u8]);
-                        //input.partial_sigs.insert(*pubkey, concat_sig);
-                        partial_sigs.insert(*pubkey, concat_sig);
-                    }
-                };
+                Some(desc) => desc,
+                None => {
+                    // TODO: try to determine this from the paths in `hd_keypaths`.
 
-                if let Some(non_wit_utxo) = &input.non_witness_utxo {
-                    if non_wit_utxo.txid() != prevout.txid {
-                        return Err(Error::InputTxidMismatch((non_wit_utxo.txid(), prevout)));
-                    }
-
-                    let prev_script = &non_wit_utxo.output
-                        [psbt.global.unsigned_tx.input[i].previous_output.vout as usize]
-                        .script_pubkey;
-
-                    // return (signature, sighash) from here
-                    let sign_script = if let Some(redeem_script) = &input.redeem_script {
-                        if &redeem_script.to_p2sh() != prev_script {
-                            return Err(Error::InputRedeemScriptMismatch((
-                                prev_script.clone(),
-                                redeem_script.clone(),
-                            )));
+                    // Try with both. Inside here with the internal descriptor (if present), then
+                    // return the external and try with it a few lines down
+                    if let Some(change_descriptor) = self.change_descriptor.as_ref() {
+                        let signing_ctx = PSBTSigningContext::new(&mut psbt, n, &self.signers);
+                        if let Err(e) = change_descriptor.satisfy(input, signing_ctx) {
+                            info!("Couldn't satisfy input #{} : {:?}", n, e);
                         }
-
-                        redeem_script
-                    } else {
-                        prev_script
-                    };
-
-                    for (pubkey, (fing, path)) in &input.hd_keypaths {
-                        push_sig(
-                            pubkey,
-                            signer.sig_legacy_from_fingerprint(
-                                i,
-                                sighash,
-                                fing,
-                                path,
-                                sign_script,
-                            )?,
-                        );
                     }
-                    // TODO: this sucks, we sign with every key
-                    for pubkey in signer.all_public_keys() {
-                        push_sig(
-                            pubkey,
-                            signer.sig_legacy_from_pubkey(i, sighash, pubkey, sign_script)?,
-                        );
-                    }
-                } else if let Some(witness_utxo) = &input.witness_utxo {
-                    let value = witness_utxo.value;
 
-                    let script = match &input.redeem_script {
-                        Some(script) if script.to_p2sh() != witness_utxo.script_pubkey => {
-                            return Err(Error::InputRedeemScriptMismatch((
-                                witness_utxo.script_pubkey.clone(),
-                                script.clone(),
-                            )))
-                        }
-                        Some(script) => script,
-                        None => &witness_utxo.script_pubkey,
-                    };
-
-                    let sign_script = if script.is_v0_p2wpkh() {
-                        self.to_p2pkh(&script.as_bytes()[2..])
-                    } else if script.is_v0_p2wsh() {
-                        match &input.witness_script {
-                            None => Err(Error::InputMissingWitnessScript(i)),
-                            Some(witness_script) if script != &witness_script.to_v0_p2wsh() => {
-                                Err(Error::InputRedeemScriptMismatch((
-                                    script.clone(),
-                                    witness_script.clone(),
-                                )))
-                            }
-                            Some(witness_script) => Ok(witness_script),
-                        }?
-                        .clone()
-                    } else {
-                        return Err(Error::InputUnknownSegwitScript(script.clone()));
-                    };
-
-                    for (pubkey, (fing, path)) in &input.hd_keypaths {
-                        push_sig(
-                            pubkey,
-                            signer.sig_segwit_from_fingerprint(
-                                i,
-                                sighash,
-                                fing,
-                                path,
-                                &sign_script,
-                                value,
-                            )?,
-                        );
-                    }
-                    // TODO: this sucks, we sign with every key
-                    for pubkey in signer.all_public_keys() {
-                        push_sig(
-                            pubkey,
-                            signer.sig_segwit_from_pubkey(
-                                i,
-                                sighash,
-                                pubkey,
-                                &sign_script,
-                                value,
-                            )?,
-                        );
-                    }
-                } else {
-                    return Err(Error::MissingUTXO);
+                    &self.descriptor
                 }
-            }
+            };
 
-            // push all the signatures into the psbt
-            input.partial_sigs.append(&mut partial_sigs);
+            let signing_ctx = PSBTSigningContext::new(&mut psbt, n, &self.signers);
+            if let Err(e) = desc.satisfy(input, signing_ctx) {
+                info!("Couldn't satisfy input #{} : {:?}", n, e);
+            }
         }
 
         // attempt to finalize
@@ -452,20 +360,24 @@ where
 
     pub fn policies(&self, script_type: ScriptType) -> Result<Option<Policy>, Error> {
         match (script_type, self.change_descriptor.as_ref()) {
-            (ScriptType::External, _) => Ok(self.descriptor.extract_policy()?),
+            (ScriptType::External, _) => {
+                Ok(self.descriptor.extract_policy(Arc::clone(&self.signers))?)
+            }
             (ScriptType::Internal, None) => Ok(None),
-            (ScriptType::Internal, Some(desc)) => Ok(desc.extract_policy()?),
+            (ScriptType::Internal, Some(desc)) => {
+                Ok(desc.extract_policy(Arc::clone(&self.signers))?)
+            }
         }
     }
 
     pub fn public_descriptor(
         &self,
         script_type: ScriptType,
-    ) -> Result<Option<ExtendedDescriptor>, Error> {
+    ) -> Result<Option<&Descriptor<DescriptorKey>>, Error> {
         match (script_type, self.change_descriptor.as_ref()) {
-            (ScriptType::External, _) => Ok(Some(self.descriptor.as_public_version()?)),
+            (ScriptType::External, _) => Ok(Some(&self.descriptor)),
             (ScriptType::Internal, None) => Ok(None),
-            (ScriptType::Internal, Some(desc)) => Ok(Some(desc.as_public_version()?)),
+            (ScriptType::Internal, Some(desc)) => Ok(Some(desc)),
         }
     }
 
@@ -477,17 +389,6 @@ where
         let mut tx = psbt.global.unsigned_tx.clone();
 
         for (n, input) in tx.input.iter_mut().enumerate() {
-            // safe to run only on the descriptor because we assume the change descriptor also has
-            // the same structure
-            let desc = self.descriptor.derive_from_psbt_input(psbt, n);
-            debug!("{:?}", psbt.inputs[n].hd_keypaths);
-            debug!("reconstructed descriptor is {:?}", desc);
-
-            let desc = match desc {
-                Err(_) => return Ok(false),
-                Ok(desc) => desc,
-            };
-
             // if the height is None in the database it means it's still unconfirmed, so consider
             // that as a very high value
             let create_height = self
@@ -495,6 +396,7 @@ where
                 .borrow()
                 .get_tx(&input.previous_output.txid, false)?
                 .and_then(|tx| Some(tx.height.unwrap_or(std::u32::MAX)));
+            // TODO: keep current_height updated when we will sync headers
             let current_height = assume_height.or(self.current_height);
 
             debug!(
@@ -502,11 +404,44 @@ where
                 n, input.previous_output, create_height, current_height
             );
 
-            // TODO: use height once we sync headers
-            let satisfier =
-                PSBTSatisfier::new(&psbt.inputs[n], false, create_height, current_height);
+            let desc = match psbt
+                .get_utxo_for(n)
+                .map(|txout| self.get_descriptor_for_txout(&txout))
+                .transpose()?
+                .flatten()
+            {
+                Some(desc) => desc,
+                None => {
+                    // TODO: try to determine this from the paths in `hd_keypaths`
 
-            match desc.satisfy(input, satisfier) {
+                    // Try with both. Inside here with the internal descriptor (if present), then
+                    // return the external and try with it a few lines down
+                    if let Some(change_descriptor) = self.change_descriptor.as_ref() {
+                        match change_descriptor.satisfy(
+                            input,
+                            (
+                                psbt.inputs[n].clone(),
+                                After::new(current_height, false),
+                                Older::new(current_height, create_height, false),
+                            ),
+                        ) {
+                            Ok(_) => continue,
+                            Err(_) => {} // ignore the error and try later with the other one
+                        }
+                    }
+
+                    &self.descriptor
+                }
+            };
+
+            match desc.satisfy(
+                input,
+                (
+                    psbt.inputs[n].clone(),
+                    After::new(current_height, false),
+                    Older::new(current_height, create_height, false),
+                ),
+            ) {
                 Ok(_) => continue,
                 Err(e) => {
                     debug!("satisfy error {:?} for input {}", e, n);
@@ -539,7 +474,10 @@ where
         0
     }
 
-    fn get_descriptor_for(&self, script_type: ScriptType) -> &ExtendedDescriptor {
+    fn get_descriptor_for_script_type(
+        &self,
+        script_type: ScriptType,
+    ) -> &Descriptor<DescriptorKey> {
         let desc = match script_type {
             ScriptType::External => &self.descriptor,
             ScriptType::Internal => &self.change_descriptor.as_ref().unwrap_or(&self.descriptor),
@@ -548,14 +486,15 @@ where
         desc
     }
 
-    fn to_p2pkh(&self, pubkey_hash: &[u8]) -> Script {
-        Builder::new()
-            .push_opcode(opcodes::all::OP_DUP)
-            .push_opcode(opcodes::all::OP_HASH160)
-            .push_slice(pubkey_hash)
-            .push_opcode(opcodes::all::OP_EQUALVERIFY)
-            .push_opcode(opcodes::all::OP_CHECKSIG)
-            .into_script()
+    fn get_descriptor_for_txout(
+        &self,
+        txout: &TxOut,
+    ) -> Result<Option<&Descriptor<DescriptorKey>>, Error> {
+        Ok(self
+            .database
+            .borrow()
+            .get_path_from_script_pubkey(&txout.script_pubkey)?
+            .map(|(script_type, _)| self.get_descriptor_for_script_type(script_type)))
     }
 
     fn get_change_address(&self) -> Result<Script, Error> {
@@ -574,7 +513,9 @@ where
             .borrow_mut()
             .increment_last_index(script_type)?;
 
-        Ok(desc.derive(index)?.script_pubkey())
+        Ok(desc
+            .derive(&[ChildNumber::from_normal_idx(index)?])
+            .script_pubkey())
     }
 
     fn get_available_utxos(
@@ -694,7 +635,7 @@ where
                 };
 
                 // merge hd_keypaths
-                let desc = self.get_descriptor_for(script_type);
+                let desc = self.get_descriptor_for_script_type(script_type);
                 let mut hd_keypaths = desc.get_hd_keypaths(child)?;
                 psbt_input.hd_keypaths.append(&mut hd_keypaths);
             }
@@ -714,43 +655,14 @@ where
         descriptor: &str,
         change_descriptor: Option<&str>,
         network: Network,
-        mut database: D,
+        database: D,
         mut client: B,
     ) -> Result<Self, Error> {
-        database.check_descriptor_checksum(
-            ScriptType::External,
-            get_checksum(descriptor)?.as_bytes(),
-        )?;
-        let descriptor = ExtendedDescriptor::from_str(descriptor)?;
-        let change_descriptor = match change_descriptor {
-            Some(desc) => {
-                database.check_descriptor_checksum(
-                    ScriptType::Internal,
-                    get_checksum(desc)?.as_bytes(),
-                )?;
+        let mut wallet = Self::new_offline(descriptor, change_descriptor, network, database)?;
+        wallet.current_height = Some(maybe_await!(client.get_height())? as u32);
+        wallet.client = RefCell::new(client);
 
-                let parsed = ExtendedDescriptor::from_str(desc)?;
-                if !parsed.same_structure(descriptor.as_ref()) {
-                    return Err(Error::DifferentDescriptorStructure);
-                }
-
-                Some(parsed)
-            }
-            None => None,
-        };
-
-        let current_height = Some(maybe_await!(client.get_height())? as u32);
-
-        Ok(Wallet {
-            descriptor,
-            change_descriptor,
-            network,
-
-            current_height,
-
-            client: RefCell::new(client),
-            database: RefCell::new(database),
-        })
+        Ok(wallet)
     }
 
     #[maybe_async]
@@ -784,7 +696,9 @@ where
             let start = Instant::now();
 
             for i in 0..=max_address {
-                let derived = self.descriptor.derive(i).unwrap();
+                let derived = self
+                    .descriptor
+                    .derive(&[ChildNumber::from_normal_idx(i).unwrap()]);
 
                 address_batch.set_script_pubkey(
                     &derived.script_pubkey(),
@@ -794,7 +708,11 @@ where
             }
             if self.change_descriptor.is_some() {
                 for i in 0..=max_address {
-                    let derived = self.change_descriptor.as_ref().unwrap().derive(i).unwrap();
+                    let derived = self
+                        .change_descriptor
+                        .as_ref()
+                        .unwrap()
+                        .derive(&[ChildNumber::from_normal_idx(i).unwrap()]);
 
                     address_batch.set_script_pubkey(
                         &derived.script_pubkey(),
