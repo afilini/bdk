@@ -8,6 +8,7 @@ use log::{debug, error, info, trace, LevelFilter};
 
 use bitcoin::consensus::encode::{deserialize, serialize, serialize_hex};
 use bitcoin::hashes::hex::{FromHex, ToHex};
+use bitcoin::blockdata::script::Builder;
 use bitcoin::util::psbt::PartiallySignedTransaction;
 use bitcoin::{Address, OutPoint};
 
@@ -410,9 +411,21 @@ where
         let psbt = base64::decode(&sub_matches.value_of("psbt").unwrap()).unwrap();
         let psbt: PartiallySignedTransaction = deserialize(&psbt).unwrap();
 
+        println!("{:#?}", psbt);
+
+        let mut tx = psbt.clone().extract_tx();
+
+        for (i, p_i) in tx.input.iter_mut().zip(psbt.inputs.iter()) {
+            i.script_sig = Builder::new().push_slice(&p_i.redeem_script.clone().unwrap().to_bytes()).into_script();
+
+            i.witness = vec![
+                p_i.partial_sigs.values().nth(0).unwrap().clone(),
+            ];
+        }
+
         Ok(Some(format!(
             "TX: {}",
-            serialize(&psbt.extract_tx()).to_hex()
+            serialize(&tx).to_hex()
         )))
     } else if let Some(sub_matches) = matches.subcommand_matches("finalize_psbt") {
         let psbt = base64::decode(&sub_matches.value_of("psbt").unwrap()).unwrap();

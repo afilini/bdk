@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::ops::Deref;
 use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
@@ -28,6 +30,16 @@ pub trait Blockchain {
     fn is_online(&self) -> bool;
 
     fn offline() -> Self;
+}
+
+impl<T: Blockchain> Blockchain for Arc<T> {
+    fn is_online(&self) -> bool {
+        self.deref().is_online()
+    }
+
+    fn offline() -> Self {
+        Arc::new(T::offline())
+    }
 }
 
 pub struct OfflineBlockchain;
@@ -65,6 +77,35 @@ pub trait OnlineBlockchain: Blockchain {
 
     fn get_height(&mut self) -> Result<usize, Error>;
 }
+
+/* #[maybe_async]
+impl<T: OnlineBlockchain> OnlineBlockchain for Arc<T> {
+    fn get_capabilities(&self) -> HashSet<Capability> {
+        self.deref().get_capabilities()
+    }
+
+    fn setup<D: BatchDatabase + DatabaseUtils, P: Progress>(
+        &mut self,
+        stop_gap: Option<usize>,
+        database: &mut D,
+        progress_update: P,
+    ) -> Result<(), Error> {
+    }
+
+    fn sync<D: BatchDatabase + DatabaseUtils, P: Progress>(
+        &mut self,
+        stop_gap: Option<usize>,
+        database: &mut D,
+        progress_update: P,
+    ) -> Result<(), Error> {
+        maybe_await!(self.setup(stop_gap, database, progress_update))
+    }
+
+    fn get_tx(&mut self, txid: &Txid) -> Result<Option<Transaction>, Error>;
+    fn broadcast(&mut self, tx: &Transaction) -> Result<(), Error>;
+
+    fn get_height(&mut self) -> Result<usize, Error>;
+}*/
 
 pub type ProgressData = (f32, Option<String>);
 

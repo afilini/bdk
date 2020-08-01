@@ -20,7 +20,7 @@ pub mod policy;
 pub use self::checksum::get_checksum;
 pub use self::policy::Policy;
 
-use crate::wallet::utils::AddressTypes;
+use crate::wallet::utils::AddressType;
 
 use self::error::Error;
 
@@ -63,7 +63,7 @@ pub trait DescriptorMeta {
         index: u32,
     ) -> Result<BTreeMap<PublicKey, (Fingerprint, DerivationPath)>, Error>;
     fn is_fixed(&self) -> bool;
-    fn address_type(&self) -> Option<AddressTypes>;
+    fn address_type(&self) -> Option<AddressType>;
 }
 
 pub trait DescriptorScripts {
@@ -169,14 +169,14 @@ impl DescriptorMeta for Descriptor<DescriptorKey> {
         !found_wildcard
     }
 
-    fn address_type(&self) -> Option<AddressTypes> {
+    fn address_type(&self) -> Option<AddressType> {
         match self {
-            Descriptor::Pkh(_) => Some(AddressTypes::Pkh),
-            Descriptor::Wpkh(_) => Some(AddressTypes::Wpkh),
-            Descriptor::ShWpkh(_) => Some(AddressTypes::ShWpkh),
-            Descriptor::Sh(_) => Some(AddressTypes::Sh),
-            Descriptor::Wsh(_) => Some(AddressTypes::Wsh),
-            Descriptor::ShWsh(_) => Some(AddressTypes::ShWsh),
+            Descriptor::Pkh(_) => Some(AddressType::Pkh),
+            Descriptor::Wpkh(_) => Some(AddressType::Wpkh),
+            Descriptor::ShWpkh(_) => Some(AddressType::ShWpkh),
+            Descriptor::Sh(_) => Some(AddressType::Sh),
+            Descriptor::Wsh(_) => Some(AddressType::Wsh),
+            Descriptor::ShWsh(_) => Some(AddressType::ShWsh),
             _ => None,
         }
     }

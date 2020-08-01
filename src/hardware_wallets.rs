@@ -12,7 +12,7 @@ use hwi::HWIDevice;
 use miniscript::signer::{Signer, SignerError};
 
 use crate::error::Error;
-use crate::wallet::utils::{AddressTypes, AddressViewer};
+use crate::wallet::utils::{AddressTypes, AddressCallback};
 
 pub(crate) fn enumerate_devices() -> Result<Vec<HWIDeviceSigner>, Error> {
     Ok(hwi::interface::HWIDevice::enumerate()?
@@ -60,10 +60,6 @@ impl Signer for HWIDeviceSigner {
 }
 
 // impl AddressViewer for HWIDeviceSigner {
-//     fn supported_types(&self) -> HashSet<AddressTypes> {
-//         vec![AddressTypes::Pkh, AddressTypes::Wpkh, AddressTypes::ShWpkh].into_iter().collect()
-//     }
-//
 //     fn show_addrss(&self, child: ChildNumber, address: &Address) -> bool {
 //         let address_type = if address.script_pubkey().is_p2pkh() {
 //             HWIAddressType::Pkh

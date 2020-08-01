@@ -13,13 +13,14 @@ use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxIn
 use miniscript::descriptor::{DescriptorKey, DescriptorKeyWithSecrets};
 use miniscript::signer::{DescriptorWithSigners, PSBTSigningContext, SignersContainer};
 use miniscript::Descriptor;
+pub use miniscript::signer::{Signer, SignerId};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
 
 pub mod utils;
 
-use self::utils::{AddressViewer, After, IsDust, Older};
+use self::utils::{AddressCallback, After, IsDust, Older};
 use crate::blockchain::{noop_progress, Blockchain, OfflineBlockchain, OnlineBlockchain};
 use crate::database::{BatchDatabase, BatchOperations, DatabaseUtils};
 use crate::descriptor::{get_checksum, DescriptorMeta, DescriptorScripts, ExtractPolicy, Policy};
@@ -41,7 +42,7 @@ pub struct Wallet<B: Blockchain, D: BatchDatabase> {
 
     current_height: Option<u32>,
 
-    address_viewers: Vec<Box<dyn AddressViewer>>,
+    address_callbacks: Vec<Box<dyn AddressCallback>>,
 
     client: RefCell<B>,
     database: RefCell<D>,
@@ -86,7 +87,7 @@ where
             None => None,
         };
 
-        let mut address_viewers = vec![];
+        let address_callbacks = vec![];
 
         #[cfg(feature = "hardware-wallets")]
         for (_, (fingerprint, _)) in descriptor.get_hd_keypaths(0)?.into_iter().chain(
@@ -114,7 +115,7 @@ where
 
             current_height: None,
 
-            address_viewers,
+            address_callbacks,
 
             client: RefCell::new(B::offline()),
             database: RefCell::new(database),
@@ -137,14 +138,22 @@ where
             .ok_or(Error::ScriptDoesntHaveAddressForm)?;
 
         if !self
-            .address_viewers
+            .address_callbacks
             .iter()
-            .all(|viewer| viewer.show_address(child_number, &address))
+            .all(|viewer| if viewer.required_for(ScriptType::External) { viewer.check_script(child_number, &address.script_pubkey()) } else { true })
         {
             Err(Error::UserRejectedAddress)
         } else {
             Ok(address)
         }
+    }
+
+    pub fn add_signer(&mut self, id: SignerId<DescriptorKey>, signer: &Arc<Box<dyn Signer>>) {
+        Arc::make_mut(&mut self.signers).add_external(id, signer);
+    }
+
+    pub fn add_address_callback(&mut self, callback: Box<dyn AddressCallback>) {
+        self.address_callbacks.push(callback);
     }
 
     pub fn is_mine(&self, script: &Script) -> Result<bool, Error> {
@@ -188,7 +197,7 @@ where
 
         let mut tx = Transaction {
             version: 2,
-            lock_time: requirements.timelock.unwrap_or(0),
+            lock_time: self.current_height.unwrap(),
             input: vec![],
             output: vec![],
         };
@@ -247,7 +256,7 @@ where
         } else if requirements.timelock.is_some() {
             0xFFFFFFFE
         } else {
-            0xFFFFFFFF
+            0xFFFFFFFF - 2
         };
 
         inputs.iter_mut().for_each(|i| i.sequence = n_sequence);
@@ -552,9 +561,19 @@ where
             .borrow_mut()
             .increment_last_index(script_type)?;
 
-        Ok(desc
-            .derive(&[ChildNumber::from_normal_idx(index)?])
-            .script_pubkey())
+        let child_number = ChildNumber::from_normal_idx(index)?;
+
+        let script = desc.derive(&[child_number]).script_pubkey();
+
+        if !self
+            .address_callbacks
+            .iter()
+            .all(|viewer| if viewer.required_for(ScriptType::Internal) { viewer.check_script(child_number, &script) } else { true })
+        {
+            Err(Error::UserRejectedAddress)
+        } else {
+            Ok(script)
+        }
     }
 
     fn get_available_utxos(

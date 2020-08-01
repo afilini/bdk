@@ -1,12 +1,12 @@
-use std::collections::HashSet;
-
 use bitcoin::util::bip32::ChildNumber;
-use bitcoin::Address;
+use bitcoin::Script;
 
 use miniscript::{MiniscriptKey, Satisfier};
 
+use crate::types::ScriptType;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum AddressTypes {
+pub enum AddressType {
     Pkh,
     ShWpkh,
     Wpkh,
@@ -15,10 +15,10 @@ pub enum AddressTypes {
     Wsh,
 }
 
-pub trait AddressViewer {
-    fn supported_types(&self) -> HashSet<AddressTypes>;
+pub trait AddressCallback {
+    fn required_for(&self, script_type: ScriptType) -> bool;
 
-    fn show_address(&self, child: ChildNumber, address: &Address) -> bool;
+    fn check_script(&self, child: ChildNumber, script: &Script) -> bool;
 }
 
 // De-facto standard "dust limit" (even though it should change based on the output type)
