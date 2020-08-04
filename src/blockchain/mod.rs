@@ -58,13 +58,13 @@ pub trait OnlineBlockchain: Blockchain {
     fn get_capabilities(&self) -> HashSet<Capability>;
 
     fn setup<D: BatchDatabase + DatabaseUtils, P: Progress>(
-        &mut self,
+        &self,
         stop_gap: Option<usize>,
         database: &mut D,
         progress_update: P,
     ) -> Result<(), Error>;
     fn sync<D: BatchDatabase + DatabaseUtils, P: Progress>(
-        &mut self,
+        &self,
         stop_gap: Option<usize>,
         database: &mut D,
         progress_update: P,
@@ -72,40 +72,47 @@ pub trait OnlineBlockchain: Blockchain {
         maybe_await!(self.setup(stop_gap, database, progress_update))
     }
 
-    fn get_tx(&mut self, txid: &Txid) -> Result<Option<Transaction>, Error>;
-    fn broadcast(&mut self, tx: &Transaction) -> Result<(), Error>;
+    fn get_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error>;
+    fn broadcast(&self, tx: &Transaction) -> Result<(), Error>;
 
-    fn get_height(&mut self) -> Result<usize, Error>;
+    fn get_height(&self) -> Result<usize, Error>;
 }
 
-/* #[maybe_async]
+#[maybe_async]
 impl<T: OnlineBlockchain> OnlineBlockchain for Arc<T> {
     fn get_capabilities(&self) -> HashSet<Capability> {
         self.deref().get_capabilities()
     }
 
     fn setup<D: BatchDatabase + DatabaseUtils, P: Progress>(
-        &mut self,
+        &self,
         stop_gap: Option<usize>,
         database: &mut D,
         progress_update: P,
     ) -> Result<(), Error> {
+        self.deref().setup(stop_gap, database, progress_update)
     }
 
     fn sync<D: BatchDatabase + DatabaseUtils, P: Progress>(
-        &mut self,
+        &self,
         stop_gap: Option<usize>,
         database: &mut D,
         progress_update: P,
     ) -> Result<(), Error> {
-        maybe_await!(self.setup(stop_gap, database, progress_update))
+        self.deref().sync(stop_gap, database, progress_update)
     }
 
-    fn get_tx(&mut self, txid: &Txid) -> Result<Option<Transaction>, Error>;
-    fn broadcast(&mut self, tx: &Transaction) -> Result<(), Error>;
+    fn get_tx(&self, txid: &Txid) -> Result<Option<Transaction>, Error> {
+        self.deref().get_tx(txid)
+    }
+    fn broadcast(&self, tx: &Transaction) -> Result<(), Error> {
+        self.deref().broadcast(tx)
+    }
 
-    fn get_height(&mut self) -> Result<usize, Error>;
-}*/
+    fn get_height(&self) -> Result<usize, Error> {
+        self.deref().get_height()
+    }
+}
 
 pub type ProgressData = (f32, Option<String>);
 

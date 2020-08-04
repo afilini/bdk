@@ -2,6 +2,7 @@ use bitcoin::util::bip32::ChildNumber;
 use bitcoin::Script;
 
 use miniscript::{MiniscriptKey, Satisfier};
+pub use miniscript::signer::{Signer, SignerError, SignerId};
 
 use crate::types::ScriptType;
 

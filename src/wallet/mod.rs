@@ -13,7 +13,7 @@ use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxIn
 use miniscript::descriptor::{DescriptorKey, DescriptorKeyWithSecrets};
 use miniscript::signer::{DescriptorWithSigners, PSBTSigningContext, SignersContainer};
 use miniscript::Descriptor;
-pub use miniscript::signer::{Signer, SignerId};
+use miniscript::signer::{Signer, SignerId};
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
@@ -714,7 +714,7 @@ where
         change_descriptor: Option<&str>,
         network: Network,
         database: D,
-        mut client: B,
+        client: B,
     ) -> Result<Self, Error> {
         let mut wallet = Self::new_offline(descriptor, change_descriptor, network, database)?;
         wallet.current_height = Some(maybe_await!(client.get_height())? as u32);
