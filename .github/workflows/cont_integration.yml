@@ -7,6 +7,8 @@ jobs:
   build-test:
     name: Build and Test
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true # FIXME issue #168
     strategy:
       matrix:
         rust:
@@ -70,6 +72,7 @@ jobs:
     runs-on: ubuntu-16.04
     container: bitcoindevkit/electrs
     env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true # FIXME issue #168
       MAGICAL_RPC_AUTH: USER_PASS
       MAGICAL_RPC_USER: admin
       MAGICAL_RPC_PASS: passw
@@ -104,6 +107,7 @@ jobs:
     name: Check WASM
     runs-on: ubuntu-16.04
     env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true # FIXME issue #168
       CC: clang-10
       CFLAGS: -I/usr/include
     steps:
@@ -138,6 +142,8 @@ jobs:
   fmt:
     name: Rust fmt
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true # FIXME issue #168
     steps:
       - name: checkout
         uses: actions/checkout@v2

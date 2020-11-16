@@ -6,6 +6,8 @@ jobs:
   tarpaulin-codecov:
     name: Tarpaulin to codecov.io
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_UNSECURE_COMMANDS: true # FIXME issue #168
     steps:
       - name: checkout
         uses: actions/checkout@v2
