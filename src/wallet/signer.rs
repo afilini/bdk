@@ -30,6 +30,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use std::str::FromStr;
+//! # use bitcoin::secp256k1::{Secp256k1, All};
 //! # use bitcoin::*;
 //! # use bitcoin::util::psbt;
 //! # use bitcoin::util::bip32::Fingerprint;
@@ -62,6 +63,7 @@
 //!         &self,
 //!         psbt: &mut psbt::PartiallySignedTransaction,
 //!         input_index: Option<usize>,
+//!         _secp: &Secp256k1<All>,
 //!     ) -> Result<(), SignerError> {
 //!         let input_index = input_index.ok_or(SignerError::InputIndexOutOfRange)?;
 //!         self.device.sign_input(psbt, input_index)?;
@@ -97,7 +99,7 @@ use std::sync::Arc;
 use bitcoin::blockdata::opcodes;
 use bitcoin::blockdata::script::Builder as ScriptBuilder;
 use bitcoin::hashes::{hash160, Hash};
-use bitcoin::secp256k1::{Message, Secp256k1};
+use bitcoin::secp256k1::{All, Message, Secp256k1};
 use bitcoin::util::bip32::{ExtendedPrivKey, Fingerprint};
 use bitcoin::util::{bip143, psbt};
 use bitcoin::{PrivateKey, Script, SigHash, SigHashType};
@@ -172,6 +174,7 @@ pub trait Signer: fmt::Debug + Send + Sync {
         &self,
         psbt: &mut psbt::PartiallySignedTransaction,
         input_index: Option<usize>,
+        secp: &Secp256k1<All>,
     ) -> Result<(), SignerError>;
 
     /// Return whether or not the signer signs the whole transaction in one go instead of every
@@ -193,6 +196,7 @@ impl Signer for DescriptorXKey<ExtendedPrivKey> {
         &self,
         psbt: &mut psbt::PartiallySignedTransaction,
         input_index: Option<usize>,
+        secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
         let input_index = input_index.unwrap();
         if input_index >= psbt.inputs.len() {
@@ -203,7 +207,7 @@ impl Signer for DescriptorXKey<ExtendedPrivKey> {
             .hd_keypaths
             .iter()
             .filter_map(|(pk, &(fingerprint, ref path))| {
-                if self.matches(fingerprint, &path).is_some() {
+                if self.matches(&(fingerprint, path.clone()), &secp).is_some() {
                     Some((pk, path))
                 } else {
                     None
@@ -215,13 +219,11 @@ impl Signer for DescriptorXKey<ExtendedPrivKey> {
             None => return Ok(()),
         };
 
-        let ctx = Secp256k1::signing_only();
-
-        let derived_key = self.xkey.derive_priv(&ctx, &deriv_path).unwrap();
-        if &derived_key.private_key.public_key(&ctx) != public_key {
+        let derived_key = self.xkey.derive_priv(&secp, &deriv_path).unwrap();
+        if &derived_key.private_key.public_key(&secp) != public_key {
             Err(SignerError::InvalidKey)
         } else {
-            derived_key.private_key.sign(psbt, Some(input_index))
+            derived_key.private_key.sign(psbt, Some(input_index), secp)
         }
     }
 
@@ -239,15 +241,14 @@ impl Signer for PrivateKey {
         &self,
         psbt: &mut psbt::PartiallySignedTransaction,
         input_index: Option<usize>,
+        secp: &Secp256k1<All>,
     ) -> Result<(), SignerError> {
         let input_index = input_index.unwrap();
         if input_index >= psbt.inputs.len() {
             return Err(SignerError::InputIndexOutOfRange);
         }
 
-        let ctx = Secp256k1::signing_only();
-
-        let pubkey = self.public_key(&ctx);
+        let pubkey = self.public_key(&secp);
         if psbt.inputs[input_index].partial_sigs.contains_key(&pubkey) {
             return Ok(());
         }
@@ -261,7 +262,7 @@ impl Signer for PrivateKey {
             None => Legacy::sighash(psbt, input_index)?,
         };
 
-        let signature = ctx.sign(
+        let signature = secp.sign(
             &Message::from_slice(&hash.into_inner()[..]).unwrap(),
             &self.key,
         );
@@ -323,17 +324,18 @@ impl From<(SignerId, SignerOrdering)> for SignersContainerKey {
 pub struct SignersContainer(BTreeMap<SignersContainerKey, Arc<dyn Signer>>);
 
 impl SignersContainer {
-    pub fn as_key_map(&self) -> KeyMap {
+    pub fn as_key_map(&self, secp: &Secp256k1<All>) -> KeyMap {
         self.0
             .values()
             .filter_map(|signer| signer.descriptor_secret_key())
-            .filter_map(|secret| secret.as_public().ok().map(|public| (public, secret)))
+            .filter_map(|secret| secret.as_public(secp).ok().map(|public| (public, secret)))
             .collect()
     }
 }
 
 impl From<KeyMap> for SignersContainer {
     fn from(keymap: KeyMap) -> SignersContainer {
+        let secp = Secp256k1::new();
         let mut container = SignersContainer::new();
 
         for (_, secret) in keymap {
@@ -349,7 +351,7 @@ impl From<KeyMap> for SignersContainer {
                     Arc::new(private_key.key),
                 ),
                 DescriptorSecretKey::XPrv(xprv) => container.add_external(
-                    SignerId::from(xprv.root_fingerprint()),
+                    SignerId::from(xprv.root_fingerprint(&secp)),
                     SignerOrdering::default(),
                     Arc::new(xprv),
                 ),
