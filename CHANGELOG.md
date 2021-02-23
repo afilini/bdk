@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Descriptor
+#### Changed
+
+- Renamed `HDKeyPaths` to `BIP32Derivation`
+
 ## [v0.4.0] - [v0.3.0]
 
 ### Keys

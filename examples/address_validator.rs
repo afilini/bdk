@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use bdk::bitcoin;
 use bdk::database::MemoryDatabase;
-use bdk::descriptor::HDKeyPaths;
+use bdk::descriptor::BIP32Derivation;
 use bdk::wallet::address_validator::{AddressValidator, AddressValidatorError};
 use bdk::KeychainKind;
 use bdk::Wallet;
@@ -41,10 +41,10 @@ impl AddressValidator for DummyValidator {
     fn validate(
         &self,
         keychain: KeychainKind,
-        hd_keypaths: &HDKeyPaths,
+        bip32_derivation: &BIP32Derivation,
         script: &Script,
     ) -> Result<(), AddressValidatorError> {
-        let (_, path) = hd_keypaths
+        let (_, path) = bip32_derivation
             .values()
             .find(|(fing, _)| fing == &Fingerprint::from_hex("bc123c3e").unwrap())
             .ok_or(AddressValidatorError::InvalidScript)?;

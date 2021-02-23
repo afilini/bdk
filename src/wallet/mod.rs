@@ -775,7 +775,7 @@ where
     /// # Ok::<(), bdk::Error>(())
     pub fn sign(&self, mut psbt: PSBT, assume_height: Option<u32>) -> Result<(PSBT, bool), Error> {
         // this helps us doing our job later
-        self.add_input_hd_keypaths(&mut psbt)?;
+        self.add_input_bip32_derivation(&mut psbt)?;
 
         for signer in self
             .signers
@@ -968,11 +968,11 @@ where
 
         let derived_descriptor = descriptor.as_derived(index, &self.secp);
 
-        let hd_keypaths = derived_descriptor.get_hd_keypaths(&self.secp)?;
+        let bip32_derivation = derived_descriptor.get_bip32_derivation(&self.secp)?;
         let script = derived_descriptor.script_pubkey();
 
         for validator in &self.address_validators {
-            validator.validate(keychain, &hd_keypaths, &script)?;
+            validator.validate(keychain, &bip32_derivation, &script)?;
         }
 
         Ok(index)
@@ -1166,7 +1166,7 @@ where
 
             let (desc, _) = self._get_descriptor_for_keychain(keychain);
             let derived_descriptor = desc.as_derived(child, &self.secp);
-            psbt_input.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp)?;
+            psbt_input.bip32_derivation = derived_descriptor.get_bip32_derivation(&self.secp)?;
 
             psbt_input.redeem_script = derived_descriptor.psbt_redeem_script();
             psbt_input.witness_script = derived_descriptor.psbt_witness_script();
@@ -1184,7 +1184,7 @@ where
         }
 
         // probably redundant but it doesn't hurt...
-        self.add_input_hd_keypaths(&mut psbt)?;
+        self.add_input_bip32_derivation(&mut psbt)?;
 
         // add metadata for the outputs
         for (psbt_output, tx_output) in psbt
@@ -1200,7 +1200,8 @@ where
                 let (desc, _) = self._get_descriptor_for_keychain(keychain);
                 let derived_descriptor = desc.as_derived(child, &self.secp);
 
-                psbt_output.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp)?;
+                psbt_output.bip32_derivation =
+                    derived_descriptor.get_bip32_derivation(&self.secp)?;
                 if params.include_output_redeem_witness_script {
                     psbt_output.witness_script = derived_descriptor.psbt_witness_script();
                     psbt_output.redeem_script = derived_descriptor.psbt_redeem_script();
@@ -1211,13 +1212,13 @@ where
         Ok(psbt)
     }
 
-    fn add_input_hd_keypaths(&self, psbt: &mut PSBT) -> Result<(), Error> {
+    fn add_input_bip32_derivation(&self, psbt: &mut PSBT) -> Result<(), Error> {
         let mut input_utxos = Vec::with_capacity(psbt.inputs.len());
         for n in 0..psbt.inputs.len() {
             input_utxos.push(psbt.get_utxo_for(n).clone());
         }
 
-        // try to add hd_keypaths if we've already seen the output
+        // try to add bip32_derivation if we've already seen the output
         for (psbt_input, out) in psbt.inputs.iter_mut().zip(input_utxos.iter()) {
             if let Some(out) = out {
                 if let Some((keychain, child)) = self
@@ -1227,12 +1228,12 @@ where
                 {
                     debug!("Found descriptor {:?}/{}", keychain, child);
 
-                    // merge hd_keypaths
+                    // merge bip32_derivation
                     let desc = self.get_descriptor_for_keychain(keychain);
-                    let mut hd_keypaths = desc
+                    let mut bip32_derivation = desc
                         .as_derived(child, &self.secp)
-                        .get_hd_keypaths(&self.secp)?;
-                    psbt_input.bip32_derivation.append(&mut hd_keypaths);
+                        .get_bip32_derivation(&self.secp)?;
+                    psbt_input.bip32_derivation.append(&mut bip32_derivation);
                 }
             }
         }
@@ -1928,7 +1929,7 @@ mod test {
     }
 
     #[test]
-    fn test_create_tx_input_hd_keypaths() {
+    fn test_create_tx_input_bip32_derivation() {
         use bitcoin::util::bip32::{DerivationPath, Fingerprint};
         use std::str::FromStr;
 
@@ -1951,7 +1952,7 @@ mod test {
     }
 
     #[test]
-    fn test_create_tx_output_hd_keypaths() {
+    fn test_create_tx_output_bip32_derivation() {
         use bitcoin::util::bip32::{DerivationPath, Fingerprint};
         use std::str::FromStr;
 
@@ -3173,7 +3174,7 @@ mod test {
     }
 
     #[test]
-    fn test_sign_single_xprv_no_hd_keypaths() {
+    fn test_sign_single_xprv_no_bip32_derivation() {
         let (wallet, _, _) = get_funded_wallet("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
         let addr = wallet.get_new_address().unwrap();
         let mut builder = wallet.build_tx();

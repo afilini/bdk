@@ -263,7 +263,7 @@ pub(crate) mod types;
 pub mod wallet;
 
 pub use descriptor::template;
-pub use descriptor::HDKeyPaths;
+pub use descriptor::BIP32Derivation;
 pub use error::Error;
 pub use types::*;
 pub use wallet::address_validator;

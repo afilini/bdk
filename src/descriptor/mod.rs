@@ -69,7 +69,7 @@ pub type DerivedDescriptor<'s> = Descriptor<DerivedDescriptorKey<'s>>;
 ///
 /// [`psbt::Input`]: bitcoin::util::psbt::Input
 /// [`psbt::Output`]: bitcoin::util::psbt::Output
-pub type HDKeyPaths = BTreeMap<PublicKey, KeySource>;
+pub type BIP32Derivation = BTreeMap<PublicKey, KeySource>;
 
 /// Trait for types which can be converted into an [`ExtendedDescriptor`] and a [`KeyMap`] usable by a wallet in a specific [`Network`]
 pub trait IntoWalletDescriptor {
@@ -324,15 +324,15 @@ impl XKeyUtils for DescriptorXKey<ExtendedPrivKey> {
 }
 
 pub(crate) trait DerivedDescriptorMeta {
-    fn get_hd_keypaths(&self, secp: &SecpCtx) -> Result<HDKeyPaths, DescriptorError>;
+    fn get_bip32_derivation(&self, secp: &SecpCtx) -> Result<BIP32Derivation, DescriptorError>;
 }
 
 pub(crate) trait DescriptorMeta {
     fn is_witness(&self) -> bool;
     fn get_extended_keys(&self) -> Result<Vec<DescriptorXKey<ExtendedPubKey>>, DescriptorError>;
-    fn derive_from_hd_keypaths<'s>(
+    fn derive_from_bip32_derivation<'s>(
         &self,
-        hd_keypaths: &HDKeyPaths,
+        bip32_derivation: &BIP32Derivation,
         utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>>;
@@ -400,14 +400,14 @@ impl DescriptorMeta for ExtendedDescriptor {
         Ok(answer)
     }
 
-    fn derive_from_hd_keypaths<'s>(
+    fn derive_from_bip32_derivation<'s>(
         &self,
-        hd_keypaths: &HDKeyPaths,
+        bip32_derivation: &BIP32Derivation,
         utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
         let index: HashMap<_, Vec<_>> =
-            hd_keypaths
+            bip32_derivation
                 .values()
                 .fold(HashMap::new(), |mut map, (f, p)| {
                     map.entry(f).or_default().push(p);
@@ -481,7 +481,7 @@ impl DescriptorMeta for ExtendedDescriptor {
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
         if let Some(derived) =
-            self.derive_from_hd_keypaths(&psbt_input.bip32_derivation, &utxo, secp)
+            self.derive_from_bip32_derivation(&psbt_input.bip32_derivation, &utxo, secp)
         {
             return Some(derived);
         }
@@ -522,7 +522,7 @@ impl DescriptorMeta for ExtendedDescriptor {
 }
 
 impl<'s> DerivedDescriptorMeta for DerivedDescriptor<'s> {
-    fn get_hd_keypaths(&self, secp: &SecpCtx) -> Result<HDKeyPaths, DescriptorError> {
+    fn get_bip32_derivation(&self, secp: &SecpCtx) -> Result<BIP32Derivation, DescriptorError> {
         let mut answer = BTreeMap::new();
         self.for_each_key(|key| {
             if let DescriptorPublicKey::XPub(xpub) = key.as_key().deref() {
