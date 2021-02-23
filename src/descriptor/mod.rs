@@ -339,7 +339,7 @@ pub(crate) trait DescriptorMeta {
     fn derive_from_psbt_input<'s>(
         &self,
         psbt_input: &psbt::Input,
-        utxo: Option<TxOut>,
+        utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>>;
 }
@@ -477,7 +477,7 @@ impl DescriptorMeta for ExtendedDescriptor {
     fn derive_from_psbt_input<'s>(
         &self,
         psbt_input: &psbt::Input,
-        utxo: Option<TxOut>,
+        utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
         if let Some(derived) =
@@ -575,7 +575,7 @@ mod test {
         .unwrap();
 
         assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+            .derive_from_psbt_input(&psbt.inputs[0], &psbt.get_utxo_for(0), &Secp256k1::new())
             .is_some());
     }
 
@@ -606,7 +606,7 @@ mod test {
         .unwrap();
 
         assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+            .derive_from_psbt_input(&psbt.inputs[0], &psbt.get_utxo_for(0), &Secp256k1::new())
             .is_some());
     }
 
@@ -630,7 +630,7 @@ mod test {
         .unwrap();
 
         assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+            .derive_from_psbt_input(&psbt.inputs[0], &psbt.get_utxo_for(0), &Secp256k1::new())
             .is_some());
     }
 
@@ -660,7 +660,7 @@ mod test {
         .unwrap();
 
         assert!(descriptor
-            .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
+            .derive_from_psbt_input(&psbt.inputs[0], &psbt.get_utxo_for(0), &Secp256k1::new())
             .is_some());
     }
 
@@ -703,7 +703,8 @@ mod test {
         )
         .unwrap();
 
-        let found = descriptor.derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &secp);
+        let found =
+            descriptor.derive_from_psbt_input(&psbt.inputs[0], &psbt.get_utxo_for(0), &secp);
 
         assert!(found.is_some());
         assert_eq!(

@@ -866,13 +866,13 @@ where
                 .or_else(|| {
                     self.descriptor.derive_from_psbt_input(
                         psbt_input,
-                        psbt.get_utxo_for(n),
+                        &psbt.get_utxo_for(n),
                         &self.secp,
                     )
                 })
                 .or_else(|| {
                     self.change_descriptor.as_ref().and_then(|desc| {
-                        desc.derive_from_psbt_input(psbt_input, psbt.get_utxo_for(n), &self.secp)
+                        desc.derive_from_psbt_input(psbt_input, &psbt.get_utxo_for(n), &self.secp)
                     })
                 });
 
