@@ -333,6 +333,7 @@ pub(crate) trait DescriptorMeta {
     fn derive_from_hd_keypaths<'s>(
         &self,
         hd_keypaths: &HDKeyPaths,
+        utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>>;
     fn derive_from_psbt_input<'s>(
@@ -402,56 +403,75 @@ impl DescriptorMeta for ExtendedDescriptor {
     fn derive_from_hd_keypaths<'s>(
         &self,
         hd_keypaths: &HDKeyPaths,
+        utxo: &Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
-        let index: HashMap<_, _> = hd_keypaths.values().map(|(a, b)| (a, b)).collect();
+        let index: HashMap<_, Vec<_>> =
+            hd_keypaths
+                .values()
+                .fold(HashMap::new(), |mut map, (f, p)| {
+                    map.entry(f).or_default().push(p);
+                    map
+                });
 
-        let mut path_found = None;
+        let mut descriptor_found = None;
         self.for_each_key(|key| {
-            if path_found.is_some() {
+            if descriptor_found.is_some() {
                 // already found a matching path, we are done
                 return true;
             }
 
             if let DescriptorPublicKey::XPub(xpub) = key.as_key().deref() {
+                // Ignore non-wildcard keys, since they are effectively "fixed". If a descriptor
+                // only has non-wildcard keys, then it's fixed and doesn't need this part. On the
+                // other end, if there are wildcard keys we should only consider those since they
+                // are the ones that contain the actual derivation index.
+                if xpub.wildcard == Wildcard::None {
+                    return false;
+                }
+
+                let root_fingerprint = xpub.root_fingerprint(secp);
+                let paths = match index.get(&root_fingerprint) {
+                    Some(paths) => paths,
+                    None => return false,
+                };
+
                 // Check if the key matches one entry in our `index`. If it does, `matches()` will
                 // return the "prefix" that matched, so we remove that prefix from the full path
-                // found in `index` and save it in `derive_path`. We expect this to be a derivation
-                // path of length 1 if the key is `wildcard` and an empty path otherwise.
-                let root_fingerprint = xpub.root_fingerprint(secp);
-                let derivation_path: Option<Vec<ChildNumber>> = index
-                    .get_key_value(&root_fingerprint)
-                    .and_then(|(fingerprint, path)| {
-                        xpub.matches(&(**fingerprint, (*path).clone()), secp)
-                    })
-                    .map(|prefix| {
-                        index
-                            .get(&xpub.root_fingerprint(secp))
-                            .unwrap()
-                            .into_iter()
-                            .skip(prefix.into_iter().count())
-                            .cloned()
-                            .collect()
-                    });
+                // found in `index`. We expect this to be a derivation path of length 1 because
+                // the key is `wildcard`
+                for path in paths {
+                    let prefix = match xpub.matches(&(root_fingerprint, (*path).clone()), secp) {
+                        Some(prefix) => prefix,
+                        _ => continue,
+                    };
+                    let path_without_prefix: Vec<_> = path
+                        .into_iter()
+                        .skip(prefix.into_iter().count())
+                        .cloned()
+                        .collect();
 
-                match derivation_path {
-                    Some(path) if xpub.wildcard != Wildcard::None && path.len() == 1 => {
-                        // Ignore hardened wildcards
-                        if let ChildNumber::Normal { index } = path[0] {
-                            path_found = Some(index)
+                    // Only consider paths of length 1 and with a normal step
+                    if let &[ChildNumber::Normal { index }] = path_without_prefix.as_slice() {
+                        let descriptor = self.as_derived(index, secp);
+
+                        // If we have the UTXO double check by generating the script_pubkey for
+                        // the descriptor and comparing it
+                        if let Some(utxo) = utxo {
+                            if descriptor.script_pubkey() != utxo.script_pubkey {
+                                return false;
+                            }
                         }
+
+                        descriptor_found = Some(descriptor)
                     }
-                    Some(path) if xpub.wildcard == Wildcard::None && path.is_empty() => {
-                        path_found = Some(0)
-                    }
-                    _ => {}
                 }
             }
 
-            true
+            false
         });
 
-        path_found.map(|path| self.as_derived(path, secp))
+        descriptor_found
     }
 
     fn derive_from_psbt_input<'s>(
@@ -460,7 +480,9 @@ impl DescriptorMeta for ExtendedDescriptor {
         utxo: Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
-        if let Some(derived) = self.derive_from_hd_keypaths(&psbt_input.bip32_derivation, secp) {
+        if let Some(derived) =
+            self.derive_from_hd_keypaths(&psbt_input.bip32_derivation, &utxo, secp)
+        {
             return Some(derived);
         }
         if self.is_deriveable() {
@@ -640,6 +662,54 @@ mod test {
         assert!(descriptor
             .derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &Secp256k1::new())
             .is_some());
+    }
+
+    #[test]
+    fn test_derive_from_psbt_input_edge_case_same_key() {
+        use std::str::FromStr;
+
+        let secp = Secp256k1::new();
+
+        // Our descriptor contains the same key, once with a wildcard path m/0/* and once with a
+        // fixed path of m/0/5
+        let (descriptor, _) = Descriptor::<DescriptorPublicKey>::parse_descriptor(
+            &secp, "sh(and_v(v:pk(tprv8ZgxMBicQKsPdEpgG7Bo5seco4WuhQJpX4soNr8AKx5fWsgQHXDQVAYCT5z5zd1JSQyzSAbF6m1UtdTMX9wyXY13HDamRuzLeHkSHNviQZB/0/*),pk(tprv8ZgxMBicQKsPdEpgG7Bo5seco4WuhQJpX4soNr8AKx5fWsgQHXDQVAYCT5z5zd1JSQyzSAbF6m1UtdTMX9wyXY13HDamRuzLeHkSHNviQZB/0/5)))",
+        )
+        .unwrap();
+
+        // This psbt spends and input from address #1, which means that the keys have paths m/0/1
+        // and m/0/5. We should correctly detect that this is address #1 instead of #5
+        let psbt: psbt::PartiallySignedTransaction = deserialize(
+            &Vec::<u8>::from_hex(
+                "70736274ff010055010000000155a951caabf3adc17011b50bf7b5277bd8\
+                 7984eadb9c7148a7794f976575f47f0000000000ffffffff01e125000000\
+                 0000001976a914344a0f48ca150ec2b903817660b9b68b13a6702688ac00\
+                 000000000100e002000000000101b02bb8a1253af4dc685e8ae0fa6fd701\
+                 2c714ece6234814cfaad31b212aec5680100000000feffffff0210270000\
+                 0000000017a9147612e375ade0fe6511b965122c4abac9e8c71aff870731\
+                 14000000000017a9140d0feac1f69a04467f8308dc0cfe4a45cafb092987\
+                 02473044022035cf76f783fd555c9ec6fdebc5209656217dd89c2c6647ff\
+                 0a0b44fe020ec62f02201bb328762f2006d42ab4f9c5fbc1a0a062975be3\
+                 7ec51abafdd76ee1580f59030121038caa50b1ad30300a3c84f07c6e089d\
+                 90a6f32ec6a12f0753db1529a0df97cb7426901d00010446210230a5ccbf\
+                 715c41b497a849381fb6070afb8246e94edaf83b3934ae9b758dd68ead21\
+                 0377d07b8d74ade4d9872ba91b535e44add4e33c3c5b498143d858e38e51\
+                 dcbd82ac22060230a5ccbf715c41b497a849381fb6070afb8246e94edaf8\
+                 3b3934ae9b758dd68e0c43315493000000000100000022060377d07b8d74\
+                 ade4d9872ba91b535e44add4e33c3c5b498143d858e38e51dcbd820c4331\
+                 549300000000050000000000",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let found = descriptor.derive_from_psbt_input(&psbt.inputs[0], psbt.get_utxo_for(0), &secp);
+
+        assert!(found.is_some());
+        assert_eq!(
+            found.unwrap().script_pubkey(),
+            Script::from_str("a9147612e375ade0fe6511b965122c4abac9e8c71aff87").unwrap()
+        );
     }
 
     #[test]
