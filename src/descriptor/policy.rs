@@ -842,7 +842,7 @@ impl<Ctx: ScriptContext> ExtractPolicy for Miniscript<DescriptorPublicKey, Ctx> 
             Terminal::Hash160(hash) => {
                 Some(SatisfiableItem::Hash160Preimage { hash: *hash }.into())
             }
-            Terminal::Multi(k, pks) => {
+            Terminal::Multi(k, pks) | Terminal::MultiA(k, pks) => {
                 Policy::make_multisig(pks, signers, build_sat, *k, false, secp)?
             }
             // Identities
@@ -969,6 +969,7 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
                 WshInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
             },
             Descriptor::Bare(ms) => Ok(ms.as_inner().extract_policy(signers, build_sat, secp)?),
+            Descriptor::Tr(_) => unimplemented!("policy unimplemented for Tr descriptors"),
         }
     }
 }

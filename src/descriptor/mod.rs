@@ -23,9 +23,11 @@ use bitcoin::util::bip32::{
 use bitcoin::util::psbt;
 use bitcoin::{Network, PublicKey, Script, TxOut};
 
-use miniscript::descriptor::{DescriptorPublicKey, DescriptorType, DescriptorXKey, Wildcard};
+use miniscript::descriptor::{
+    DescriptorPublicKey, DescriptorType, DescriptorXKey, ShInner, Wildcard,
+};
 pub use miniscript::{descriptor::KeyMap, Descriptor, Legacy, Miniscript, ScriptContext, Segwitv0};
-use miniscript::{DescriptorTrait, ForEachKey, TranslatePk};
+use miniscript::{ForEachKey, TranslatePk};
 
 use crate::descriptor::policy::BuildSatisfaction;
 
@@ -358,23 +360,29 @@ pub(crate) trait DescriptorScripts {
 
 impl<'s> DescriptorScripts for DerivedDescriptor<'s> {
     fn psbt_redeem_script(&self) -> Option<Script> {
-        match self.desc_type() {
-            DescriptorType::ShWpkh => Some(self.explicit_script()),
-            DescriptorType::ShWsh => Some(self.explicit_script().to_v0_p2wsh()),
-            DescriptorType::Sh => Some(self.explicit_script()),
-            DescriptorType::Bare => Some(self.explicit_script()),
-            DescriptorType::ShSortedMulti => Some(self.explicit_script()),
+        match self {
+            Descriptor::Sh(ref sh) => match sh.as_inner() {
+                ShInner::Wsh(_) => Some(sh.inner_script().to_v0_p2wsh()),
+                _ => Some(sh.inner_script()),
+            },
+            Descriptor::Bare(ref bare) => Some(bare.inner_script()),
+            // DescriptorType::ShWpkh => Some(self.inner_script()),
+            // DescriptorType::ShWsh => Some(self.explicit_script().to_v0_p2wsh()),
+            // DescriptorType::Sh => Some(self.explicit_script()),
+            // DescriptorType::Bare => Some(self.explicit_script()),
+            // DescriptorType::ShSortedMulti => Some(self.explicit_script()),
             _ => None,
         }
     }
 
     fn psbt_witness_script(&self) -> Option<Script> {
-        match self.desc_type() {
-            DescriptorType::Wsh => Some(self.explicit_script()),
-            DescriptorType::ShWsh => Some(self.explicit_script()),
-            DescriptorType::WshSortedMulti | DescriptorType::ShWshSortedMulti => {
-                Some(self.explicit_script())
-            }
+        match self {
+            Descriptor::Wsh(ref wsh) => Some(wsh.inner_script()),
+            // DescriptorType::Wsh => Some(self.explicit_script()),
+            // DescriptorType::ShWsh => Some(self.explicit_script()),
+            // DescriptorType::WshSortedMulti | DescriptorType::ShWshSortedMulti => {
+            //     Some(self.explicit_script())
+            // }
             _ => None,
         }
     }
@@ -477,31 +485,69 @@ impl DescriptorMeta for ExtendedDescriptor {
         }
 
         let descriptor = self.as_derived_fixed(secp);
-        match descriptor.desc_type() {
+        match (
+            &descriptor,
+            utxo,
+            psbt_input.redeem_script.as_ref(),
+            psbt_input.witness_script.as_ref(),
+        ) {
             // TODO: add pk() here
-            DescriptorType::Pkh | DescriptorType::Wpkh | DescriptorType::ShWpkh
-                if utxo.is_some()
-                    && descriptor.script_pubkey() == utxo.as_ref().unwrap().script_pubkey =>
+            (Descriptor::Pkh(ref pkh), Some(utxo), _, _) if utxo.script_pubkey == pkh.spk() => {
+                Some(descriptor)
+            }
+            (Descriptor::Wpkh(ref wpkh), Some(utxo), _, _) if utxo.script_pubkey == wpkh.spk() => {
+                Some(descriptor)
+            }
+
+            // DescriptorType::Pkh | DescriptorType::Wpkh | DescriptorType::ShWpkh
+            //     if utxo.is_some()
+            //         && descriptor.script_pubkey() == utxo.as_ref().unwrap().script_pubkey =>
+            // {
+            //     Some(descriptor)
+            // }
+            (Descriptor::Sh(ref sh), utxo, rscript, wscript) => {
+                match (sh.as_inner(), utxo, rscript, wscript) {
+                    (ShInner::Wpkh(ref wpkh), Some(utxo), _, _)
+                        if utxo.script_pubkey == wpkh.spk() =>
+                    {
+                        Some(descriptor)
+                    }
+                    (ShInner::Wsh(ref wsh), _, _, Some(wscript))
+                        if wscript == &wsh.inner_script() =>
+                    {
+                        Some(descriptor)
+                    }
+                    (_, _, Some(rscript), _) if rscript == &sh.inner_script() => Some(descriptor),
+                    _ => None,
+                }
+            }
+
+            (Descriptor::Wsh(ref wsh), _, _, Some(wscript)) if wscript == &wsh.inner_script() => {
+                Some(descriptor)
+            }
+            (Descriptor::Bare(ref bare), _, Some(rscript), _)
+                if rscript == &bare.inner_script() =>
             {
                 Some(descriptor)
             }
-            DescriptorType::Bare | DescriptorType::Sh | DescriptorType::ShSortedMulti
-                if psbt_input.redeem_script.is_some()
-                    && &descriptor.explicit_script()
-                        == psbt_input.redeem_script.as_ref().unwrap() =>
-            {
-                Some(descriptor)
-            }
-            DescriptorType::Wsh
-            | DescriptorType::ShWsh
-            | DescriptorType::ShWshSortedMulti
-            | DescriptorType::WshSortedMulti
-                if psbt_input.witness_script.is_some()
-                    && &descriptor.explicit_script()
-                        == psbt_input.witness_script.as_ref().unwrap() =>
-            {
-                Some(descriptor)
-            }
+
+            // DescriptorType::Bare | DescriptorType::Sh | DescriptorType::ShSortedMulti
+            //     if psbt_input.redeem_script.is_some()
+            //         && &descriptor.explicit_script()
+            //             == psbt_input.redeem_script.as_ref().unwrap() =>
+            // {
+            //     Some(descriptor)
+            // }
+            // DescriptorType::Wsh
+            // | DescriptorType::ShWsh
+            // | DescriptorType::ShWshSortedMulti
+            // | DescriptorType::WshSortedMulti
+            //     if psbt_input.witness_script.is_some()
+            //         && &descriptor.explicit_script()
+            //             == psbt_input.witness_script.as_ref().unwrap() =>
+            // {
+            //     Some(descriptor)
+            // }
             _ => None,
         }
     }

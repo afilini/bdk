@@ -58,7 +58,7 @@ use utils::{check_nlocktime, check_nsequence_rbf, After, Older, SecpCtx, DUST_LI
 use crate::blockchain::{Blockchain, Progress};
 use crate::database::memory::MemoryDatabase;
 use crate::database::{BatchDatabase, BatchOperations, DatabaseUtils};
-use crate::descriptor::derived::AsDerived;
+use crate::descriptor::derived::{AsDerived, DerivedDescriptorSafeOps};
 use crate::descriptor::policy::BuildSatisfaction;
 use crate::descriptor::{
     get_checksum, into_wallet_descriptor_checked, DerivedDescriptor, DerivedDescriptorMeta,
@@ -261,7 +261,7 @@ where
 
         let derived_key = self.descriptor.as_derived(current_index, &self.secp);
 
-        let script_pubkey = derived_key.script_pubkey();
+        let script_pubkey = derived_key.script_pubkey_derived();
 
         let found_used = self
             .list_transactions(true)?
@@ -1096,7 +1096,7 @@ where
         let (desc, keychain) = self._get_descriptor_for_keychain(KeychainKind::Internal);
         let index = self.fetch_and_increment_index(keychain)?;
 
-        Ok(desc.as_derived(index, &self.secp).script_pubkey())
+        Ok(desc.as_derived(index, &self.secp).script_pubkey_derived())
     }
 
     fn fetch_and_increment_index(&self, keychain: KeychainKind) -> Result<u32, Error> {
@@ -1118,7 +1118,7 @@ where
         let derived_descriptor = descriptor.as_derived(index, &self.secp);
 
         let hd_keypaths = derived_descriptor.get_hd_keypaths(&self.secp)?;
-        let script = derived_descriptor.script_pubkey();
+        let script = derived_descriptor.script_pubkey_derived();
 
         for validator in &self.address_validators {
             validator.validate(keychain, &hd_keypaths, &script)?;
@@ -1166,7 +1166,7 @@ where
         let start_time = time::Instant::new();
         for i in from..(from + count) {
             address_batch.set_script_pubkey(
-                &descriptor.as_derived(i, &self.secp).script_pubkey(),
+                &descriptor.as_derived(i, &self.secp).script_pubkey_derived(),
                 keychain,
                 i,
             )?;

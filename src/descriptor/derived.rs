@@ -17,11 +17,11 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use bitcoin::hashes::hash160;
-use bitcoin::PublicKey;
+use bitcoin::{PublicKey, Script};
 
 pub use miniscript::{
-    descriptor::KeyMap, descriptor::Wildcard, Descriptor, DescriptorPublicKey, Legacy, Miniscript,
-    ScriptContext, Segwitv0,
+    descriptor::KeyMap, descriptor::Wildcard, Descriptor, DescriptorPublicKey, DescriptorTrait,
+    Legacy, Miniscript, ScriptContext, Segwitv0,
 };
 use miniscript::{MiniscriptKey, ToPublicKey, TranslatePk};
 
@@ -96,9 +96,6 @@ impl<'s> MiniscriptKey for DerivedDescriptorKey<'s> {
     fn is_uncompressed(&self) -> bool {
         self.0.is_uncompressed()
     }
-    fn serialized_len(&self) -> usize {
-        self.0.serialized_len()
-    }
 }
 
 impl<'s> ToPublicKey for DerivedDescriptorKey<'s> {
@@ -136,15 +133,35 @@ impl AsDerived for Descriptor<DescriptorPublicKey> {
         index: u32,
         secp: &'s SecpCtx,
     ) -> Descriptor<DerivedDescriptorKey<'s>> {
-        self.derive(index).translate_pk_infallible(
+        let mut derived = self.derive(index).translate_pk_infallible(
             |key| DerivedDescriptorKey::new(key.clone(), secp),
             |key| DerivedDescriptorKey::new(key.clone(), secp),
-        )
+        );
+
+        if let Descriptor::Tr(tr) = &mut derived {
+            tr.spend_info(secp);
+        }
+
+        derived
     }
 
     fn as_derived_fixed<'s>(&self, secp: &'s SecpCtx) -> Descriptor<DerivedDescriptorKey<'s>> {
         assert!(!self.is_deriveable());
 
         self.as_derived(0, secp)
+    }
+}
+
+pub(crate) trait DerivedDescriptorSafeOps {
+    /// The [`Descriptor::script_pubkey`] method can fail on `Tr` descriptors that don't have the
+    /// `spend_info` inside. Since we generate those upon derivation, it's guaranteed that the
+    /// method will not fail on `DerivedDescriptor`s.
+    fn script_pubkey_derived(&self) -> Script;
+}
+
+impl<'s> DerivedDescriptorSafeOps for Descriptor<DerivedDescriptorKey<'s>> {
+    fn script_pubkey_derived(&self) -> Script {
+        self.script_pubkey()
+            .expect("`spend_info` is always present in `DerivedDescriptor`s")
     }
 }
