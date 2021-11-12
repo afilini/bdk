@@ -339,6 +339,7 @@ pub(crate) trait DerivedDescriptorMeta {
 
 pub(crate) trait DescriptorMeta {
     fn is_witness(&self) -> bool;
+    fn is_tap(&self) -> bool;
     fn get_extended_keys(&self) -> Result<Vec<DescriptorXKey<ExtendedPubKey>>, DescriptorError>;
     fn derive_from_hd_keypaths<'s>(
         &self,
@@ -398,7 +399,12 @@ impl DescriptorMeta for ExtendedDescriptor {
                 | DescriptorType::ShWsh
                 | DescriptorType::ShWshSortedMulti
                 | DescriptorType::WshSortedMulti
+                | DescriptorType::Tr
         )
+    }
+
+    fn is_tap(&self) -> bool {
+        self.desc_type() == DescriptorType::Tr
     }
 
     fn get_extended_keys(&self) -> Result<Vec<DescriptorXKey<ExtendedPubKey>>, DescriptorError> {

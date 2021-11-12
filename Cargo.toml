@@ -14,8 +14,9 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 bdk-macros = "^0.6"
 log = "^0.4"
-miniscript = { git = "https://github.com/sanket1729/rust-miniscript.git", rev = "cbe744e", features = ["use-serde"] }
+miniscript = { path = "../rust-miniscript", features = ["use-serde"] }
 bitcoin = { git = "https://github.com/sanket1729/rust-bitcoin", branch = "taproot_psbt", features = ["use-serde", "base64"] }
+secp256k1 = { version = "0.20.2", features = [ "rand-std" ] }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = { version = "^1.0" }
 rand = "^0.7"
@@ -113,3 +114,6 @@ members = ["macros"]
 features = ["compiler", "electrum", "esplora", "ureq", "compact_filters", "rpc", "key-value-db", "sqlite", "all-keys", "verify"]
 # defines the configuration attribute `docsrs`
 rustdoc-args = ["--cfg", "docsrs"]
+
+[patch.crates-io]
+bitcoin = { git = "https://github.com/sanket1729/rust-bitcoin", branch = "taproot_psbt", features = ["use-serde", "base64"] }

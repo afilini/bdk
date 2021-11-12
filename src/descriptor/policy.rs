@@ -969,7 +969,12 @@ impl ExtractPolicy for Descriptor<DescriptorPublicKey> {
                 WshInner::SortedMulti(ref keys) => make_sortedmulti(keys, signers, build_sat, secp),
             },
             Descriptor::Bare(ms) => Ok(ms.as_inner().extract_policy(signers, build_sat, secp)?),
-            Descriptor::Tr(_) => unimplemented!("policy unimplemented for Tr descriptors"),
+            Descriptor::Tr(tr) => {
+                let mut items = vec![signature(tr.internal_key(), signers, build_sat, secp)];
+                items.append(&mut tr.iter_scripts().filter_map(|(_, ms)| ms.extract_policy(signers, build_sat, secp).transpose()).collect::<Result<Vec<_>, _>>()?);
+
+                Ok(Policy::make_thresh(items, 1)?)
+            },
         }
     }
 }

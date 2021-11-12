@@ -30,8 +30,9 @@ use bitcoin::util::psbt::Input;
 use bitcoin::util::psbt::PartiallySignedTransaction as Psbt;
 use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxOut, Txid};
 
-use miniscript::descriptor::DescriptorTrait;
+use miniscript::descriptor::{DescriptorTrait, Descriptor, DescriptorSinglePub, DescriptorPublicKey};
 use miniscript::psbt::PsbtInputSatisfier;
+use miniscript::ToPublicKey;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
@@ -46,6 +47,7 @@ pub(crate) mod utils;
 #[cfg(feature = "verify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "verify")))]
 pub mod verify;
+pub(crate) mod taproot;
 
 pub use utils::IsDust;
 
@@ -54,6 +56,7 @@ use coin_selection::DefaultCoinSelectionAlgorithm;
 use signer::{SignOptions, Signer, SignerOrdering, SignersContainer};
 use tx_builder::{BumpFee, CreateTx, FeePolicy, TxBuilder, TxParams};
 use utils::{check_nlocktime, check_nsequence_rbf, After, Older, SecpCtx, DUST_LIMIT_SATOSHI};
+use taproot::*;
 
 use crate::blockchain::{Blockchain, Progress};
 use crate::database::memory::MemoryDatabase;
@@ -900,7 +903,7 @@ where
 
         // If we aren't allowed to use `witness_utxo`, ensure that every input but finalized one
         // has the `non_witness_utxo`
-        if !sign_options.trust_witness_utxo
+        if !self.descriptor.is_tap() && !sign_options.trust_witness_utxo // TODO: should be separate for the two descriptors
             && psbt
                 .inputs
                 .iter()
@@ -1407,12 +1410,19 @@ where
         psbt_input.redeem_script = derived_descriptor.psbt_redeem_script();
         psbt_input.witness_script = derived_descriptor.psbt_witness_script();
 
+        if let Descriptor::Tr(tr) = &derived_descriptor {
+            let internal_key = ecdsa_to_schnorr(&tr.internal_key().to_public_key());
+
+            // add taproot metadata
+            psbt_input.tap_internal_key = Some(internal_key);
+        }
+
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.database.borrow().get_raw_tx(&prev_output.txid)? {
             if desc.is_witness() {
                 psbt_input.witness_utxo = Some(prev_tx.output[prev_output.vout as usize].clone());
             }
-            if !desc.is_witness() || !only_witness_utxo {
+            if (!desc.is_witness() || !only_witness_utxo) && !desc.is_tap() {
                 psbt_input.non_witness_utxo = Some(prev_tx);
             }
         }

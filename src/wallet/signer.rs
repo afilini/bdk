@@ -93,13 +93,14 @@ use bitcoin::blockdata::script::Builder as ScriptBuilder;
 use bitcoin::hashes::{hash160, Hash};
 use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey, Fingerprint};
-use bitcoin::util::{bip143, psbt};
-use bitcoin::{PrivateKey, Script, SigHash, SigHashType};
+use bitcoin::util::{bip143, psbt, schnorr, sighash, taproot};
+use bitcoin::{PrivateKey, Script, SigHashType};
 
 use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, KeyMap};
-use miniscript::{Legacy, MiniscriptKey, Segwitv0};
+use miniscript::{Legacy, MiniscriptKey, Segwitv0, Tap};
 
 use super::utils::SecpCtx;
+use super::taproot::*;
 use crate::descriptor::XKeyUtils;
 
 /// Identifier of a signer in the `SignersContainers`. Used as a key to find the right signer among
@@ -153,7 +154,23 @@ pub enum SignerError {
     /// To enable signing transactions with non-standard sighashes set
     /// [`SignOptions::allow_all_sighashes`] to `true`.
     NonStandardSighash,
+
+    Sighash(sighash::Error),
+    Secp(bitcoin::secp256k1::Error),
 }
+
+impl From<bitcoin::secp256k1::Error> for SignerError {
+    fn from(e: bitcoin::secp256k1::Error) -> Self {
+        SignerError::Secp(e)
+    }
+}
+impl From<sighash::Error> for SignerError {
+    fn from(e: sighash::Error) -> Self {
+        SignerError::Sighash(e)
+    }
+}
+
+
 
 impl fmt::Display for SignerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -218,6 +235,8 @@ impl Signer for DescriptorXKey<ExtendedPrivKey> {
             return Ok(());
         }
 
+        // TODO: taproot derivation (check `tap_key_origins`)
+
         let (public_key, full_path) = match psbt.inputs[input_index]
             .bip32_derivation
             .iter()
@@ -265,6 +284,36 @@ impl Signer for DescriptorXKey<ExtendedPrivKey> {
     }
 }
 
+fn tap_signature(key: &PrivateKey, psbt: &mut psbt::PartiallySignedTransaction, input_index: usize, secp: &SecpCtx) -> Result<(), SignerError> {
+    let mut keypair = schnorr::KeyPair::from_seckey_slice(secp, key.key.as_ref())?;
+    let public = ecdsa_to_schnorr(&key.public_key(secp));
+
+    let (hash, sighash_type) = Tap::sighash(psbt, input_index)?;
+    dbg!(&hash);
+
+    let psbt_input = &mut psbt.inputs[input_index];
+
+    // assume key-spend if i can't determine otherwise
+
+    let tweak = taproot::compute_tap_tweak(psbt_input.tap_merkle_root.map(|r| bitcoin::hashes::sha256::Hash::from_slice(&r).unwrap()), public);
+    keypair
+        .tweak_add_assign(&secp, &tweak)
+        .expect("TapTweakHash::from_key_and_tweak is broken");
+
+    let signature = secp.schnorrsig_sign(
+        &Message::from_slice(&hash.into_inner()[..]).unwrap(),
+        &keypair,
+    );
+
+    // let sighash_type = match sighash_type {
+    //     SigHashType::All => sighash::SigHashType::Default,
+    //     hash_ty => hash_ty.into()
+    // };
+    psbt_input.tap_key_sig = Some((signature, sighash_type.into()));
+
+    Ok(())
+}
+
 impl Signer for PrivateKey {
     fn sign(
         &self,
@@ -281,6 +330,10 @@ impl Signer for PrivateKey {
             || psbt.inputs[input_index].final_script_witness.is_some()
         {
             return Ok(());
+        }
+
+        if psbt.inputs[input_index].tap_internal_key.is_some() || psbt.inputs[input_index].tap_merkle_root.is_some() {
+            return tap_signature(self, psbt, input_index, secp);
         }
 
         let pubkey = self.public_key(secp);
@@ -490,17 +543,21 @@ impl Default for SignOptions {
 }
 
 pub(crate) trait ComputeSighash {
+    type SigHash;
+
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, SigHashType), SignerError>;
+    ) -> Result<(Self::SigHash, SigHashType), SignerError>;
 }
 
 impl ComputeSighash for Legacy {
+    type SigHash = bitcoin::SigHash;
+
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, SigHashType), SignerError> {
+    ) -> Result<(Self::SigHash, SigHashType), SignerError> {
         if input_index >= psbt.inputs.len() || input_index >= psbt.global.unsigned_tx.input.len() {
             return Err(SignerError::InputIndexOutOfRange);
         }
@@ -545,10 +602,12 @@ fn p2wpkh_script_code(script: &Script) -> Script {
 }
 
 impl ComputeSighash for Segwitv0 {
+    type SigHash = bitcoin::SigHash;
+
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, SigHashType), SignerError> {
+    ) -> Result<(Self::SigHash, SigHashType), SignerError> {
         if input_index >= psbt.inputs.len() || input_index >= psbt.global.unsigned_tx.input.len() {
             return Err(SignerError::InputIndexOutOfRange);
         }
@@ -609,6 +668,49 @@ impl ComputeSighash for Segwitv0 {
         ))
     }
 }
+
+impl ComputeSighash for Tap {
+    type SigHash = taproot::TapSighashHash;
+
+    fn sighash(
+        psbt: &psbt::PartiallySignedTransaction,
+        input_index: usize,
+    ) -> Result<(Self::SigHash, SigHashType), SignerError> {
+        if input_index >= psbt.inputs.len() || input_index >= psbt.global.unsigned_tx.input.len() {
+            return Err(SignerError::InputIndexOutOfRange);
+        }
+
+        let psbt_input = &psbt.inputs[input_index];
+        let tx_input = &psbt.global.unsigned_tx.input[input_index];
+
+        let sighash_type = psbt_input.sighash_type.unwrap_or(SigHashType::All);
+        let witness_utxos = psbt.inputs.iter().cloned().map(|i| i.witness_utxo).collect::<Vec<_>>();
+        let mut all_witness_utxos = vec![];
+
+        let mut cache = sighash::SigHashCache::new(&psbt.global.unsigned_tx);
+        let prevouts = if sighash_type.as_u32() & 0x80 != 0 {
+            sighash::Prevouts::One(input_index, witness_utxos[input_index].as_ref().ok_or(SignerError::MissingWitnessUtxo)?)
+        } else if witness_utxos.iter().all(Option::is_some) {
+            all_witness_utxos.extend(witness_utxos.into_iter().filter_map(|x| x));
+            sighash::Prevouts::All(&all_witness_utxos)
+        } else {
+            return Err(SignerError::MissingWitnessUtxo);
+        };
+
+        Ok((
+            cache.taproot_signature_hash(
+                input_index,
+                &prevouts,
+                None,
+                None, // TODO: script from the psbt
+                sighash_type.into(),
+            )?,
+            sighash_type,
+        ))
+    }
+}
+
+
 
 impl PartialOrd for SignersContainerKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
