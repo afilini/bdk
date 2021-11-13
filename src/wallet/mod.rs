@@ -24,13 +24,17 @@ use std::sync::Arc;
 use bitcoin::secp256k1::Secp256k1;
 
 use bitcoin::consensus::encode::serialize;
+use bitcoin::hashes::Hash;
 use bitcoin::util::base58;
 use bitcoin::util::psbt::raw::Key as PsbtKey;
 use bitcoin::util::psbt::Input;
 use bitcoin::util::psbt::PartiallySignedTransaction as Psbt;
+use bitcoin::util::taproot;
 use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxOut, Txid};
 
-use miniscript::descriptor::{DescriptorTrait, Descriptor, DescriptorSinglePub, DescriptorPublicKey};
+use miniscript::descriptor::{
+    Descriptor, DescriptorPublicKey, DescriptorSinglePub, DescriptorTrait,
+};
 use miniscript::psbt::PsbtInputSatisfier;
 use miniscript::ToPublicKey;
 
@@ -41,22 +45,22 @@ pub mod address_validator;
 pub mod coin_selection;
 pub mod export;
 pub mod signer;
+pub(crate) mod taproot_utils;
 pub mod time;
 pub mod tx_builder;
 pub(crate) mod utils;
 #[cfg(feature = "verify")]
 #[cfg_attr(docsrs, doc(cfg(feature = "verify")))]
 pub mod verify;
-pub(crate) mod taproot;
 
 pub use utils::IsDust;
 
 use address_validator::AddressValidator;
 use coin_selection::DefaultCoinSelectionAlgorithm;
 use signer::{SignOptions, Signer, SignerOrdering, SignersContainer};
+use taproot_utils::*;
 use tx_builder::{BumpFee, CreateTx, FeePolicy, TxBuilder, TxParams};
 use utils::{check_nlocktime, check_nsequence_rbf, After, Older, SecpCtx, DUST_LIMIT_SATOSHI};
-use taproot::*;
 
 use crate::blockchain::{Blockchain, Progress};
 use crate::database::memory::MemoryDatabase;
@@ -1404,17 +1408,56 @@ where
         };
 
         let desc = self.get_descriptor_for_keychain(keychain);
-        let derived_descriptor = desc.as_derived(child, &self.secp);
+        let mut derived_descriptor = desc.as_derived(child, &self.secp);
         psbt_input.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp)?;
 
         psbt_input.redeem_script = derived_descriptor.psbt_redeem_script();
         psbt_input.witness_script = derived_descriptor.psbt_witness_script();
 
-        if let Descriptor::Tr(tr) = &derived_descriptor {
+        if let Descriptor::Tr(tr) = &mut derived_descriptor {
             let internal_key = ecdsa_to_schnorr(&tr.internal_key().to_public_key());
 
             // add taproot metadata
             psbt_input.tap_internal_key = Some(internal_key);
+
+            let spend_info = tr.spend_info(&self.secp).clone();
+            psbt_input.tap_merkle_root = spend_info.merkle_root.map(|h| {
+                taproot::TapBranchHash::from_slice(h.as_ref()).expect("Invalid TapBranchHash")
+            });
+
+            debug!("spend_info = {:?}", spend_info);
+
+            let mut key_map_leaves = BTreeMap::new();
+
+            for (_, script) in tr.iter_scripts() {
+                let script_ver = (script.encode(), taproot::LeafVersion::default());
+                let leaf_hash = taproot::TapLeafHash::from_slice(&taproot::compute_leaf_hash(
+                    &script_ver.0,
+                    script_ver.1,
+                ))
+                .expect("Invalid TapLeafHash");
+                // println!("leaf_hash: {}", leaf_hash);
+
+                for key in script.iter_pk() {
+                    let key = ecdsa_to_schnorr(&key.to_public_key());
+                    key_map_leaves
+                        .entry(key)
+                        .or_insert(vec![])
+                        .push(leaf_hash.clone());
+
+                    // println!("key {} in script {:?}", key, script);
+                }
+
+                if let Some(control_block) = spend_info.control_block(&script_ver) {
+                    psbt_input.tap_scripts.insert(control_block, script_ver);
+                }
+            }
+
+            psbt_input.tap_key_origins = key_map_leaves
+                .into_iter()
+                .map(|(pk, leaf_hash)| (pk, (leaf_hash, Default::default())))
+                .collect();
+            debug!("psbt_input = {:?}", psbt_input);
         }
 
         let prev_output = utxo.outpoint;
