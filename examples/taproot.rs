@@ -11,16 +11,17 @@
 
 use std::str::FromStr;
 
-use bdk::*;
-use bdk::wallet::*;
-use bdk::database::MemoryDatabase;
-use bdk::bitcoin::{Network, self};
 use bdk::bitcoin::consensus::encode::serialize_hex;
+use bdk::bitcoin::{self, Network};
+use bdk::database::MemoryDatabase;
+use bdk::wallet::tx_builder::TxOrdering;
+use bdk::wallet::*;
+use bdk::*;
 
-use bdk::electrum_client;
 use bdk::blockchain::electrum::*;
 use bdk::blockchain::esplora::*;
 use bdk::blockchain::*;
+use bdk::electrum_client;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();

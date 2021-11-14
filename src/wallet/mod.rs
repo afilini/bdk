@@ -1425,11 +1425,13 @@ where
                 taproot::TapBranchHash::from_slice(h.as_ref()).expect("Invalid TapBranchHash")
             });
 
-            debug!("spend_info = {:?}", spend_info);
+            debug!("spend_info = {:#?}", spend_info);
 
             let mut key_map_leaves = BTreeMap::new();
 
             for (_, script) in tr.iter_scripts() {
+                trace!("checking script: {}", script.encode());
+
                 let script_ver = (script.encode(), taproot::LeafVersion::default());
                 let leaf_hash = taproot::TapLeafHash::from_slice(&taproot::compute_leaf_hash(
                     &script_ver.0,
@@ -1457,7 +1459,7 @@ where
                 .into_iter()
                 .map(|(pk, leaf_hash)| (pk, (leaf_hash, Default::default())))
                 .collect();
-            debug!("psbt_input = {:?}", psbt_input);
+            debug!("psbt_input = {:#?}", psbt_input);
         }
 
         let prev_output = utxo.outpoint;
