@@ -300,7 +300,7 @@ fn tap_signature(
         keypair: &schnorr::KeyPair,
         hash: H,
     ) -> bitcoin::secp256k1::schnorrsig::Signature {
-        secp.schnorrsig_sign(&Message::from_slice(hash.as_ref()).unwrap(), &keypair)
+        secp.schnorrsig_sign_no_aux_rand(&Message::from_slice(hash.as_ref()).unwrap(), &keypair)
     }
 
     let psbt_input = &psbt.inputs[input_index];
