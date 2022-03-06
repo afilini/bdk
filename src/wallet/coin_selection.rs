@@ -110,6 +110,7 @@ pub type DefaultCoinSelectionAlgorithm = LargestFirstCoinSelection; // make the 
 // prev_txid (32 bytes) + prev_vout (4 bytes) + sequence (4 bytes) + script_len (1 bytes)
 pub(crate) const TXIN_BASE_WEIGHT: usize = (32 + 4 + 4 + 1) * 4;
 
+pub type Waste = i64;
 /// Result of a successful coin selection
 #[derive(Debug)]
 pub struct CoinSelectionResult {
@@ -117,6 +118,8 @@ pub struct CoinSelectionResult {
     pub selected: Vec<Utxo>,
     /// Total fee amount in satoshi
     pub fee_amount: u64,
+    /// Waste value of current coin selection
+    waste: Option<Waste>,
 }
 
 impl CoinSelectionResult {
@@ -135,9 +138,28 @@ impl CoinSelectionResult {
             })
             .sum()
     }
-}
 
-type Waste = i64;
+    pub fn get_waste(
+        &self,
+        selected: Vec<WeightedUtxo>,
+        cost_of_change: Option<u64>,
+        target: u64,
+        fee_rate: FeeRate,
+        long_term_fee_rate: FeeRate,
+    ) -> Waste {
+        match self.waste {
+            Some(waste) => waste,
+            None => calculate_waste(
+                selected,
+                cost_of_change,
+                target,
+                fee_rate,
+                long_term_fee_rate,
+            )
+            .unwrap(),
+        }
+    }
+}
 
 pub fn calculate_waste(
     selected: Vec<WeightedUtxo>,
@@ -152,7 +174,7 @@ pub fn calculate_waste(
         .map(|u| OutputGroup::new(u, fee_rate))
         .collect();
 
-    // if fee_rate < long_term_fee_rate timing cost can be negative
+    // If fee_rate < long_term_fee_rate timing cost can be negative
     let timing_cost: i64 = utxo_groups.iter().fold(0, |acc, utxo| {
         let fee: i64 = utxo.fee as i64;
         let long_term_fee: i64 = long_term_fee_rate
