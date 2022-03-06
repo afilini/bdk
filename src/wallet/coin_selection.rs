@@ -46,8 +46,9 @@
 //!         let mut selected_amount = 0;
 //!         let mut additional_weight = 0;
 //!         let all_utxos_selected = required_utxos
+//!             .clone()
 //!             .into_iter()
-//!             .chain(optional_utxos)
+//!             .chain(optional_utxos.clone())
 //!             .scan(
 //!                 (&mut selected_amount, &mut additional_weight),
 //!                 |(selected_amount, additional_weight), weighted_utxo| {
@@ -66,10 +67,21 @@
 //!             });
 //!         }
 //!
-//!         Ok(CoinSelectionResult {
-//!             selected: all_utxos_selected,
-//!             fee_amount: fee_amount + additional_fees,
-//!         })
+//!         let calculated_waste = Some(
+//!             calculate_waste(
+//!                 required_utxos.into_iter().chain(optional_utxos).collect::<Vec<WeightedUtxo>>(),
+//!                 None,
+//!                 amount_needed,
+//!                 fee_rate,
+//!                 FeeRate::from_sat_per_vb(10.0),
+//!             ).unwrap()
+//!         );
+//!
+//!         Ok(CoinSelectionResult::new(
+//!             all_utxos_selected,
+//!             fee_amount + additional_fees,
+//!             calculated_waste,
+//!         ))
 //!     }
 //! }
 //!
@@ -123,6 +135,15 @@ pub struct CoinSelectionResult {
 }
 
 impl CoinSelectionResult {
+    /// Create new CoinSelectionResult
+    pub fn new(selected_utxos: Vec<Utxo>, fee_amount: u64, selection_waste: Option<Waste>) -> Self {
+        CoinSelectionResult {
+            selected: selected_utxos,
+            fee_amount,
+            waste: selection_waste,
+        }
+    }
+
     /// The total value of the inputs selected.
     pub fn selected_amount(&self) -> u64 {
         self.selected.iter().map(|u| u.txout().value).sum()
@@ -306,10 +327,7 @@ impl<D: Database> CoinSelectionAlgorithm<D> for LargestFirstCoinSelection {
             });
         }
 
-        Ok(CoinSelectionResult {
-            selected,
-            fee_amount,
-        })
+        Ok(CoinSelectionResult::new(selected, fee_amount, None))
     }
 }
 
@@ -598,10 +616,7 @@ impl BranchAndBoundCoinSelection {
             .map(|u| u.weighted_utxo.utxo)
             .collect::<Vec<_>>();
 
-        CoinSelectionResult {
-            selected,
-            fee_amount,
-        }
+        CoinSelectionResult::new(selected, fee_amount, None)
     }
 }
 
