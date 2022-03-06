@@ -137,6 +137,55 @@ impl CoinSelectionResult {
     }
 }
 
+type Waste = i64;
+
+pub fn calculate_waste(
+    selected: Vec<WeightedUtxo>,
+    cost_of_change: Option<u64>,
+    target: u64,
+    fee_rate: FeeRate,
+    long_term_fee_rate: FeeRate,
+) -> Result<Waste, Error> {
+    // Always consider the cost of spending an input now vs in the future.
+    let utxo_groups: Vec<OutputGroup> = selected
+        .into_iter()
+        .map(|u| OutputGroup::new(u, fee_rate))
+        .collect();
+
+    // if fee_rate < long_term_fee_rate timing cost can be negative
+    let timing_cost: i64 = utxo_groups.iter().fold(0, |acc, utxo| {
+        let fee: i64 = utxo.fee as i64;
+        let long_term_fee: i64 = long_term_fee_rate
+            .fee_wu(TXIN_BASE_WEIGHT + utxo.weighted_utxo.satisfaction_weight)
+            as i64;
+
+        acc + fee - long_term_fee
+    });
+
+    let selected_effective_value: i64 = utxo_groups
+        .iter()
+        .fold(0, |acc, utxo| acc + utxo.effective_value);
+
+    let creation_cost = match cost_of_change {
+        Some(change_cost) => {
+            // Consider the cost of making change and spending it in the future
+            // If we aren't making change, the caller should've set change_cost to None
+            if change_cost == 0 {
+                return Err(Error::Generic(
+                    "if there is not cost_of_change, set to None, not zero".to_string(),
+                ));
+            }
+            change_cost as i64
+        }
+        None => {
+            // When we are not making change, consider the excess we are throwing away to fees
+            selected_effective_value - target as i64
+        }
+    };
+
+    Ok(timing_cost + creation_cost)
+}
+
 /// Trait for generalized coin selection algorithms
 ///
 /// This trait can be implemented to make the [`Wallet`](super::Wallet) use a customized coin
@@ -530,49 +579,6 @@ impl BranchAndBoundCoinSelection {
         CoinSelectionResult {
             selected,
             fee_amount,
-        }
-    }
-}
-
-struct WasteMetric;
-
-impl WasteMetric {
-    fn calculate_waste(
-        selected: Vec<WeightedUtxo>,
-        cost_of_change: Option<u64>,
-        amount_needed: u64,
-        fee_rate: FeeRate,
-        long_term_fee_rate: FeeRate,
-    ) -> i64 {
-        // Always consider the cost of spending an input now vs in the future.
-        let utxo_groups: Vec<OutputGroup> = selected
-            .into_iter()
-            .map(|u| OutputGroup::new(u, fee_rate))
-            .collect();
-
-        let waste: i64 = utxo_groups.iter().fold(0, |acc, utxo| {
-            let fee: i64 = utxo.fee as i64;
-            let long_term_fee: i64 = long_term_fee_rate
-                .fee_wu(TXIN_BASE_WEIGHT + utxo.weighted_utxo.satisfaction_weight)
-                as i64;
-
-            acc + fee - long_term_fee
-        });
-
-        let selected_effective_value: i64 = utxo_groups
-            .iter()
-            .fold(0, |acc, utxo| acc + utxo.effective_value);
-
-        match cost_of_change {
-            Some(change_cost) => {
-                // Consider the cost of making change and spending it in the future
-                // If we aren't making change, the caller should've set change_cost to 0
-                waste + change_cost as i64
-            }
-            None => {
-                // When we are not making change (change_cost == 0), consider the excess we are throwing away to fees
-                waste + selected_effective_value - amount_needed as i64
-            }
         }
     }
 }
@@ -1154,7 +1160,7 @@ mod test {
         let utxo_fee_diff: u64 = utxo_fee_diffs.iter().sum();
 
         // Waste with change is the change cost and difference between fee and long term fee
-        let waste = WasteMetric::calculate_waste(
+        let waste = calculate_waste(
             selected,
             Some(cost_of_change),
             amount_needed,
@@ -1162,7 +1168,7 @@ mod test {
             long_term_fee_rate,
         );
 
-        assert_eq!(waste, (utxo_fee_diff + cost_of_change) as i64);
+        assert_eq!(waste.unwrap(), (utxo_fee_diff + cost_of_change) as i64);
     }
 
     #[test]
@@ -1205,9 +1211,8 @@ mod test {
         let excess = in_amt - utxos_fee - amount_needed;
 
         // Waste without change is the excess and difference between fee and long term fee
-        let waste =
-            WasteMetric::calculate_waste(selected, None, 200_000_000, fee_rate, long_term_fee_rate);
+        let waste = calculate_waste(selected, None, 200_000_000, fee_rate, long_term_fee_rate);
 
-        assert_eq!(waste, (utxo_fee_diff + excess) as i64);
+        assert_eq!(waste.unwrap(), (utxo_fee_diff + excess) as i64);
     }
 }
