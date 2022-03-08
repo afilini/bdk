@@ -109,6 +109,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 #[cfg(test)]
 use rand::{rngs::StdRng, SeedableRng};
+use std::cell::Cell;
 use std::convert::TryInto;
 
 /// Default coin selection algorithm used by [`TxBuilder`](super::tx_builder::TxBuilder) if not
@@ -131,7 +132,7 @@ pub struct CoinSelectionResult {
     /// Total fee amount in satoshi
     pub fee_amount: u64,
     /// Waste value of current coin selection
-    waste: Option<Waste>,
+    waste: Cell<Option<Waste>>,
 }
 
 impl CoinSelectionResult {
@@ -140,7 +141,7 @@ impl CoinSelectionResult {
         CoinSelectionResult {
             selected: selected_utxos,
             fee_amount,
-            waste: selection_waste,
+            waste: Cell::new(selection_waste),
         }
     }
 
@@ -168,16 +169,20 @@ impl CoinSelectionResult {
         fee_rate: FeeRate,
         long_term_fee_rate: FeeRate,
     ) -> Waste {
-        match self.waste {
+        match self.waste.get() {
             Some(waste) => waste,
-            None => calculate_waste(
-                selected,
-                cost_of_change,
-                target,
-                fee_rate,
-                long_term_fee_rate,
-            )
-            .unwrap(),
+            None => {
+                let calculated_waste = calculate_waste(
+                    selected,
+                    cost_of_change,
+                    target,
+                    fee_rate,
+                    long_term_fee_rate,
+                )
+                .unwrap();
+                self.waste.set(Some(calculated_waste));
+                calculated_waste
+            }
         }
     }
 }
