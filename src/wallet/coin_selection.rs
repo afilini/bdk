@@ -69,12 +69,16 @@
 //!
 //!         let calculated_waste = Some(
 //!             calculate_waste(
-//!                 required_utxos.into_iter().chain(optional_utxos).collect::<Vec<WeightedUtxo>>(),
+//!                 required_utxos
+//!                     .into_iter()
+//!                     .chain(optional_utxos)
+//!                     .collect::<Vec<WeightedUtxo>>(),
 //!                 None,
 //!                 amount_needed,
 //!                 fee_rate,
 //!                 FeeRate::from_sat_per_vb(10.0),
-//!             ).unwrap()
+//!             )
+//!             .unwrap(),
 //!         );
 //!
 //!         Ok(CoinSelectionResult::new(
