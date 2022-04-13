@@ -733,6 +733,7 @@ mod test {
                         script_pubkey: Script::new(),
                     },
                     keychain: KeychainKind::External,
+                    is_spent: false,
                 }),
             })
             .collect()
