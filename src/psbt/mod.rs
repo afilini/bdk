@@ -19,7 +19,7 @@ pub trait PsbtUtils {
 impl PsbtUtils for Psbt {
     #[allow(clippy::all)] // We want to allow `manual_map` but it is too new.
     fn get_utxo_for(&self, input_index: usize) -> Option<TxOut> {
-        let tx = &self.global.unsigned_tx;
+        let tx = &self.unsigned_tx;
 
         if input_index >= tx.input.len() {
             return None;
