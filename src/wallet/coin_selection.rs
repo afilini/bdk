@@ -46,15 +46,14 @@
 //!         let mut selected_amount = 0;
 //!         let mut additional_weight = 0;
 //!         let all_utxos_selected = required_utxos
-//!             .clone()
 //!             .into_iter()
-//!             .chain(optional_utxos.clone())
+//!             .chain(optional_utxos.into_iter())
 //!             .scan(
 //!                 (&mut selected_amount, &mut additional_weight),
 //!                 |(selected_amount, additional_weight), weighted_utxo| {
 //!                     **selected_amount += weighted_utxo.utxo.txout().value;
 //!                     **additional_weight += TXIN_BASE_WEIGHT + weighted_utxo.satisfaction_weight;
-//!                     Some(weighted_utxo.utxo)
+//!                     Some(weighted_utxo)
 //!                 },
 //!             )
 //!             .collect::<Vec<_>>();
@@ -69,10 +68,7 @@
 //!
 //!         let calculated_waste = Some(
 //!             calculate_waste(
-//!                 required_utxos
-//!                     .into_iter()
-//!                     .chain(optional_utxos)
-//!                     .collect::<Vec<WeightedUtxo>>(),
+//!                 &all_utxos_selected,
 //!                 None,
 //!                 amount_needed,
 //!                 fee_rate,
@@ -82,7 +78,7 @@
 //!         );
 //!
 //!         Ok(CoinSelectionResult::new(
-//!             all_utxos_selected,
+//!             all_utxos_selected.into_iter().map(|u| u.utxo).collect(),
 //!             fee_amount + additional_fees,
 //!             calculated_waste,
 //!         ))
@@ -167,7 +163,7 @@ impl CoinSelectionResult {
 
     pub fn get_waste(
         &self,
-        selected: Vec<WeightedUtxo>,
+        selected: &[WeightedUtxo],
         cost_of_change: Option<u64>,
         target: u64,
         fee_rate: FeeRate,
@@ -192,14 +188,14 @@ impl CoinSelectionResult {
 }
 
 pub fn calculate_waste(
-    selected: Vec<WeightedUtxo>,
+    selected: &[WeightedUtxo],
     cost_of_change: Option<u64>,
     target: u64,
     fee_rate: FeeRate,
     long_term_fee_rate: FeeRate,
 ) -> Result<Waste, Error> {
     // Always consider the cost of spending an input now vs in the future.
-    let utxo_groups: Vec<OutputGroup> = selected
+    let utxo_groups: Vec<_> = selected
         .iter()
         .map(|u| OutputGroup::new(u, fee_rate))
         .collect();
