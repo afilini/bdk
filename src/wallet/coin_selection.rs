@@ -200,7 +200,7 @@ pub fn calculate_waste(
 ) -> Result<Waste, Error> {
     // Always consider the cost of spending an input now vs in the future.
     let utxo_groups: Vec<OutputGroup> = selected
-        .into_iter()
+        .iter()
         .map(|u| OutputGroup::new(u, fee_rate))
         .collect();
 
@@ -342,16 +342,16 @@ impl<D: Database> CoinSelectionAlgorithm<D> for LargestFirstCoinSelection {
 
 #[derive(Debug, Clone)]
 // Adds fee information to an UTXO.
-struct OutputGroup {
-    weighted_utxo: WeightedUtxo,
+struct OutputGroup<'u> {
+    weighted_utxo: &'u WeightedUtxo,
     // Amount of fees for spending a certain utxo, calculated using a certain FeeRate
     fee: u64,
     // The effective value of the UTXO, i.e., the utxo value minus the fee for spending it
     effective_value: i64,
 }
 
-impl OutputGroup {
-    fn new(weighted_utxo: WeightedUtxo, fee_rate: FeeRate) -> Self {
+impl<'u> OutputGroup<'u> {
+    fn new(weighted_utxo: &'u WeightedUtxo, fee_rate: FeeRate) -> Self {
         let fee = fee_rate.fee_wu(TXIN_BASE_WEIGHT + weighted_utxo.satisfaction_weight);
         let effective_value = weighted_utxo.utxo.txout().value as i64 - fee as i64;
         OutputGroup {
@@ -399,14 +399,14 @@ impl<D: Database> CoinSelectionAlgorithm<D> for BranchAndBoundCoinSelection {
         fee_amount: u64,
     ) -> Result<CoinSelectionResult, Error> {
         // Mapping every (UTXO, usize) to an output group
-        let required_utxos: Vec<OutputGroup> = required_utxos
-            .into_iter()
+        let required_utxos: Vec<OutputGroup<'_>> = required_utxos
+            .iter()
             .map(|u| OutputGroup::new(u, fee_rate))
             .collect();
 
         // Mapping every (UTXO, usize) to an output group.
-        let optional_utxos: Vec<OutputGroup> = optional_utxos
-            .into_iter()
+        let optional_utxos: Vec<OutputGroup<'_>> = optional_utxos
+            .iter()
             .map(|u| OutputGroup::new(u, fee_rate))
             .collect();
 
@@ -474,8 +474,8 @@ impl BranchAndBoundCoinSelection {
     #[allow(clippy::too_many_arguments)]
     fn bnb(
         &self,
-        required_utxos: Vec<OutputGroup>,
-        mut optional_utxos: Vec<OutputGroup>,
+        required_utxos: Vec<OutputGroup<'_>>,
+        mut optional_utxos: Vec<OutputGroup<'_>>,
         mut curr_value: i64,
         mut curr_available_value: i64,
         actual_target: i64,
@@ -583,8 +583,8 @@ impl BranchAndBoundCoinSelection {
 
     fn single_random_draw(
         &self,
-        required_utxos: Vec<OutputGroup>,
-        mut optional_utxos: Vec<OutputGroup>,
+        required_utxos: Vec<OutputGroup<'_>>,
+        mut optional_utxos: Vec<OutputGroup<'_>>,
         curr_value: i64,
         actual_target: i64,
         fee_amount: u64,
@@ -613,16 +613,16 @@ impl BranchAndBoundCoinSelection {
         BranchAndBoundCoinSelection::calculate_cs_result(selected_utxos, required_utxos, fee_amount)
     }
 
-    fn calculate_cs_result(
-        mut selected_utxos: Vec<OutputGroup>,
-        mut required_utxos: Vec<OutputGroup>,
+    fn calculate_cs_result<'u>(
+        mut selected_utxos: Vec<OutputGroup<'u>>,
+        mut required_utxos: Vec<OutputGroup<'u>>,
         mut fee_amount: u64,
     ) -> CoinSelectionResult {
         selected_utxos.append(&mut required_utxos);
         fee_amount += selected_utxos.iter().map(|u| u.fee).sum::<u64>();
         let selected = selected_utxos
             .into_iter()
-            .map(|u| u.weighted_utxo.utxo)
+            .map(|u| u.weighted_utxo.utxo.clone())
             .collect::<Vec<_>>();
 
         CoinSelectionResult::new(selected, fee_amount, None)
@@ -1030,8 +1030,8 @@ mod test {
     #[should_panic(expected = "BnBNoExactMatch")]
     fn test_bnb_function_no_exact_match() {
         let fee_rate = FeeRate::from_sat_per_vb(10.0);
-        let utxos: Vec<OutputGroup> = get_test_utxos()
-            .into_iter()
+        let utxos: Vec<OutputGroup<'_>> = get_test_utxos()
+            .iter()
             .map(|u| OutputGroup::new(u, fee_rate))
             .collect();
 
@@ -1057,7 +1057,7 @@ mod test {
     fn test_bnb_function_tries_exceeded() {
         let fee_rate = FeeRate::from_sat_per_vb(10.0);
         let utxos: Vec<OutputGroup> = generate_same_value_utxos(100_000, 100_000)
-            .into_iter()
+            .iter()
             .map(|u| OutputGroup::new(u, fee_rate))
             .collect();
 
@@ -1087,7 +1087,7 @@ mod test {
         let cost_of_change = size_of_change as f32 * fee_rate.as_sat_vb();
 
         let utxos: Vec<_> = generate_same_value_utxos(50_000, 10)
-            .into_iter()
+            .iter()
             .map(|u| OutputGroup::new(u, fee_rate))
             .collect();
 
@@ -1123,7 +1123,7 @@ mod test {
 
         for _ in 0..200 {
             let optional_utxos: Vec<_> = generate_random_utxos(&mut rng, 40)
-                .into_iter()
+                .iter()
                 .map(|u| OutputGroup::new(u, fee_rate))
                 .collect();
 
