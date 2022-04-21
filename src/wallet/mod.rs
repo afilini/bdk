@@ -1025,7 +1025,7 @@ where
                 i.sighash_type.is_none() || i.sighash_type == Some(SigHashType::All.into())
             })
         {
-            return Err(Error::Signer(signer::SignerError::NonStandardSighash));
+            return Err(Error::Signer(signer::SignerError::NonStandardSigHash));
         }
 
         for signer in self
@@ -1476,7 +1476,7 @@ where
     pub fn get_psbt_input(
         &self,
         utxo: LocalUtxo,
-        sighash_type: Option<psbt::PsbtSigHashType>,
+        sighash_type: Option<psbt::PsbtSighashType>,
         only_witness_utxo: bool,
     ) -> Result<psbt::Input, Error> {
         // Try to find the prev_script in our db to figure out if this is internal or external,
@@ -3787,7 +3787,7 @@ pub(crate) mod test {
         assert!(
             matches!(
                 result.unwrap_err(),
-                Error::Signer(SignerError::NonStandardSighash)
+                Error::Signer(SignerError::NonStandardSigHash)
             ),
             "Signing failed with the wrong error type"
         );

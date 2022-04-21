@@ -140,7 +140,7 @@ pub(crate) struct TxParams {
     pub(crate) utxos: Vec<WeightedUtxo>,
     pub(crate) unspendable: HashSet<OutPoint>,
     pub(crate) manually_selected_only: bool,
-    pub(crate) sighash: Option<psbt::PsbtSigHashType>,
+    pub(crate) sighash: Option<psbt::PsbtSighashType>,
     pub(crate) ordering: TxOrdering,
     pub(crate) locktime: Option<u32>,
     pub(crate) rbf: Option<RbfValue>,
@@ -412,7 +412,7 @@ impl<'a, D: BatchDatabase, Cs: CoinSelectionAlgorithm<D>, Ctx: TxBuilderContext>
     /// Sign with a specific sig hash
     ///
     /// **Use this option very carefully**
-    pub fn sighash(&mut self, sighash: psbt::PsbtSigHashType) -> &mut Self {
+    pub fn sighash(&mut self, sighash: psbt::PsbtSighashType) -> &mut Self {
         self.params.sighash = Some(sighash);
         self
     }

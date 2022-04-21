@@ -96,7 +96,7 @@ use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey, Fingerprint};
 use bitcoin::util::{bip143, ecdsa, psbt};
 use bitcoin::{
-    EcdsaSigHashType, PrivateKey, PublicKey, SchnorrSigHashType, Script, SigHash, SigHashType,
+    PrivateKey, PublicKey, Script, Sighash, SigHashType,
 };
 
 use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, KeyMap};
@@ -155,9 +155,9 @@ pub enum SignerError {
     ///
     /// To enable signing transactions with non-standard sighashes set
     /// [`SignOptions::allow_all_sighashes`] to `true`.
-    NonStandardSighash,
+    NonStandardSigHash,
     /// Invalid SIGHASH for the signing context in use
-    InvalidSighash,
+    InvalidSigHash,
 }
 
 impl fmt::Display for SignerError {
@@ -500,18 +500,18 @@ impl Default for SignOptions {
     }
 }
 
-pub(crate) trait ComputeSighash {
+pub(crate) trait ComputeSigHash {
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, psbt::PsbtSigHashType), SignerError>;
+    ) -> Result<(Sighash, psbt::PsbtSighashType), SignerError>;
 }
 
-impl ComputeSighash for Legacy {
+impl ComputeSigHash for Legacy {
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, psbt::PsbtSigHashType), SignerError> {
+    ) -> Result<(Sighash, psbt::PsbtSighashType), SignerError> {
         if input_index >= psbt.inputs.len() || input_index >= psbt.unsigned_tx.input.len() {
             return Err(SignerError::InputIndexOutOfRange);
         }
@@ -554,11 +554,11 @@ fn p2wpkh_script_code(script: &Script) -> Script {
         .into_script()
 }
 
-impl ComputeSighash for Segwitv0 {
+impl ComputeSigHash for Segwitv0 {
     fn sighash(
         psbt: &psbt::PartiallySignedTransaction,
         input_index: usize,
-    ) -> Result<(SigHash, psbt::PsbtSigHashType), SignerError> {
+    ) -> Result<(Sighash, psbt::PsbtSighashType), SignerError> {
         if input_index >= psbt.inputs.len() || input_index >= psbt.unsigned_tx.input.len() {
             return Err(SignerError::InputIndexOutOfRange);
         }
@@ -570,7 +570,7 @@ impl ComputeSighash for Segwitv0 {
             .sighash_type
             .unwrap_or(SigHashType::All.into())
             .ecdsa_hash_ty()
-            .map_err(|_| SignerError::InvalidSighash)?;
+            .map_err(|_| SignerError::InvalidSigHash)?;
 
         // Always try first with the non-witness utxo
         let utxo = if let Some(prev_tx) = &psbt_input.non_witness_utxo {
