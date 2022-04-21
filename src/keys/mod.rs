@@ -951,7 +951,7 @@ pub mod test {
 
         let network = Network::Bitcoin;
         let xprv = xkey.into_xprv(network).unwrap();
-        let wif = PrivateKey::from_wif(&xprv.private_key.to_wif()).unwrap();
+        let wif = &xprv.to_priv();
         assert_eq!(wif.network, network);
 
         // test testnet wif
@@ -961,7 +961,7 @@ pub mod test {
 
         let network = Network::Testnet;
         let xprv = xkey.into_xprv(network).unwrap();
-        let wif = PrivateKey::from_wif(&xprv.private_key.to_wif()).unwrap();
+        let wif = &xprv.to_priv();
         assert_eq!(wif.network, network);
     }
 

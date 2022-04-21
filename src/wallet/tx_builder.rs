@@ -42,7 +42,7 @@ use std::default::Default;
 use std::marker::PhantomData;
 
 use bitcoin::util::psbt::{self, PartiallySignedTransaction as Psbt};
-use bitcoin::{OutPoint, Script, SigHashType, Transaction};
+use bitcoin::{OutPoint, Script, Transaction};
 
 use miniscript::descriptor::DescriptorTrait;
 

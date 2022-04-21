@@ -96,7 +96,7 @@ use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPrivKey, Fingerprint};
 use bitcoin::util::{bip143, ecdsa, psbt};
 use bitcoin::{
-    PrivateKey, PublicKey, Script, Sighash, SigHashType,
+    PrivateKey, PublicKey, Script, Sighash, EcdsaSighashType,
 };
 
 use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, KeyMap};
@@ -519,7 +519,7 @@ impl ComputeSigHash for Legacy {
         let psbt_input = &psbt.inputs[input_index];
         let tx_input = &psbt.unsigned_tx.input[input_index];
 
-        let sighash = psbt_input.sighash_type.unwrap_or(SigHashType::All.into());
+        let sighash = psbt_input.sighash_type.unwrap_or(EcdsaSighashType::All.into());
         let script = match psbt_input.redeem_script {
             Some(ref redeem_script) => redeem_script.clone(),
             None => {
@@ -568,7 +568,7 @@ impl ComputeSigHash for Segwitv0 {
 
         let sighash = psbt_input
             .sighash_type
-            .unwrap_or(SigHashType::All.into())
+            .unwrap_or(EcdsaSighashType::All.into())
             .ecdsa_hash_ty()
             .map_err(|_| SignerError::InvalidSigHash)?;
 

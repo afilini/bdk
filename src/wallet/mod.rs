@@ -25,7 +25,7 @@ use bitcoin::secp256k1::Secp256k1;
 
 use bitcoin::consensus::encode::serialize;
 use bitcoin::util::psbt;
-use bitcoin::{Address, Network, OutPoint, Script, SigHashType, Transaction, TxOut, Txid, Witness};
+use bitcoin::{Address, Network, OutPoint, Script, EcdsaSighashType, Transaction, TxOut, Txid, Witness};
 
 use miniscript::descriptor::DescriptorTrait;
 use miniscript::psbt::PsbtInputSatisfier;
@@ -1022,7 +1022,7 @@ where
         // is using `SIGHASH_ALL`
         if !sign_options.allow_all_sighashes
             && !psbt.inputs.iter().all(|i| {
-                i.sighash_type.is_none() || i.sighash_type == Some(SigHashType::All.into())
+                i.sighash_type.is_none() || i.sighash_type == Some(EcdsaSighashType::All.into())
             })
         {
             return Err(Error::Signer(signer::SignerError::NonStandardSigHash));
@@ -2214,12 +2214,12 @@ pub(crate) mod test {
         let mut builder = wallet.build_tx();
         builder
             .add_recipient(addr.script_pubkey(), 30_000)
-            .sighash(bitcoin::SigHashType::Single);
+            .sighash(psbt::PsbtSighashType::from(bitcoin::EcdsaSighashType::Single));
         let (psbt, _) = builder.finish().unwrap();
 
         assert_eq!(
             psbt.inputs[0].sighash_type,
-            Some(bitcoin::SigHashType::Single)
+            Some(psbt::PsbtSighashType::from(bitcoin::EcdsaSighashType::Single))
         );
     }
 
@@ -2512,8 +2512,8 @@ pub(crate) mod test {
         // This key has an explicit origin, so it will be encoded here
         let value_bytes = Vec::<u8>::from_hex("73756c7f30000080000000800000008002000080").unwrap();
 
-        assert_eq!(psbt.global.unknown.len(), 1);
-        assert_eq!(psbt.global.unknown.get(&psbt_key), Some(&value_bytes));
+        assert_eq!(psbt.unknown.len(), 1);
+        assert_eq!(psbt.unknown.get(&psbt_key), Some(&value_bytes));
     }
 
     #[test]
@@ -2549,8 +2549,7 @@ pub(crate) mod test {
         );
 
         assert!(
-            psbt.global
-                .unsigned_tx
+            psbt.unsigned_tx
                 .input
                 .iter()
                 .any(|input| input.previous_output == utxo.outpoint),
@@ -2775,8 +2774,8 @@ pub(crate) mod test {
         // its fingerprint directly and an empty path
         let value_bytes = Vec::<u8>::from_hex("997a323b").unwrap();
 
-        assert_eq!(psbt.global.unknown.len(), 1);
-        assert_eq!(psbt.global.unknown.get(&psbt_key), Some(&value_bytes));
+        assert_eq!(psbt.unknown.len(), 1);
+        assert_eq!(psbt.unknown.get(&psbt_key), Some(&value_bytes));
     }
 
     #[test]
@@ -3768,14 +3767,14 @@ pub(crate) mod test {
 
     #[test]
     fn test_sign_nonstandard_sighash() {
-        let sighash = SigHashType::NonePlusAnyoneCanPay;
+        let sighash = EcdsaSighashType::NonePlusAnyoneCanPay;
 
         let (wallet, _, _) = get_funded_wallet("wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)");
         let addr = wallet.get_address(New).unwrap();
         let mut builder = wallet.build_tx();
         builder
             .drain_to(addr.script_pubkey())
-            .sighash(sighash)
+            .sighash(psbt::PsbtSighashType::from(sighash))
             .drain_wallet();
         let (mut psbt, _) = builder.finish().unwrap();
 
@@ -3808,8 +3807,8 @@ pub(crate) mod test {
 
         let extracted = psbt.extract_tx();
         assert_eq!(
-            *extracted.input[0].witness[0].last().unwrap(),
-            sighash.as_u32() as u8,
+            *extracted.input[0].witness.to_vec()[0].last().unwrap(),
+            sighash.to_u32() as u8,
             "The signature should have been made with the right sighash"
         );
     }
