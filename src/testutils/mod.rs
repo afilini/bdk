@@ -14,8 +14,8 @@
 #[cfg(feature = "test-blockchains")]
 pub mod blockchain_tests;
 
-use bitcoin::secp256k1::{Secp256k1, Verification};
-use bitcoin::{Address, PublicKey, Txid};
+
+use bitcoin::{Address, Txid};
 
 #[derive(Clone, Debug)]
 pub struct TestIncomingInput {

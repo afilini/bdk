@@ -93,7 +93,7 @@ mod test {
         let mut builder = wallet.build_tx();
         builder.add_recipient(send_to.script_pubkey(), 10_000);
         let (mut psbt, _) = builder.finish().unwrap();
-        psbt.global.unsigned_tx.input.push(TxIn::default());
+        psbt.unsigned_tx.input.push(TxIn::default());
         let options = SignOptions {
             trust_witness_utxo: true,
             ..Default::default()
@@ -112,10 +112,9 @@ mod test {
 
         // add a finalized input
         psbt.inputs.push(psbt_bip.inputs[0].clone());
-        psbt.global
-            .unsigned_tx
+        psbt.unsigned_tx
             .input
-            .push(psbt_bip.global.unsigned_tx.input[0].clone());
+            .push(psbt_bip.unsigned_tx.input[0].clone());
 
         let _ = wallet.sign(&mut psbt, SignOptions::default()).unwrap();
     }
