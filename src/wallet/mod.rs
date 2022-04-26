@@ -50,7 +50,7 @@ pub use utils::IsDust;
 
 use address_validator::AddressValidator;
 use coin_selection::DefaultCoinSelectionAlgorithm;
-use signer::{SignOptions, Signer, SignerOrdering, SignersContainer};
+use signer::{SignOptions, SignerOrdering, SignersContainer, TransactionSigner};
 use tx_builder::{BumpFee, CreateTx, FeePolicy, TxBuilder, TxParams};
 use utils::{check_nlocktime, check_nsequence_rbf, After, Older, SecpCtx};
 
@@ -457,7 +457,7 @@ where
         &mut self,
         keychain: KeychainKind,
         ordering: SignerOrdering,
-        signer: Arc<dyn Signer>,
+        signer: Arc<dyn TransactionSigner>,
     ) {
         let signers = match keychain {
             KeychainKind::External => Arc::make_mut(&mut self.signers),
@@ -1036,13 +1036,7 @@ where
             .iter()
             .chain(self.change_signers.signers().iter())
         {
-            if signer.sign_whole_tx() {
-                signer.sign(psbt, None, &self.secp)?;
-            } else {
-                for index in 0..psbt.inputs.len() {
-                    signer.sign(psbt, Some(index), &self.secp)?;
-                }
-            }
+            signer.sign_transaction(psbt, &self.secp)?;
         }
 
         // attempt to finalize
