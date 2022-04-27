@@ -322,6 +322,11 @@ pub(crate) trait DescriptorMeta {
         hd_keypaths: &HdKeyPaths,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>>;
+    fn derive_from_tap_key_origins<'s>(
+        &self,
+        tap_key_origins: &TapKeyOrigins,
+        secp: &'s SecpCtx,
+    ) -> Option<DerivedDescriptor<'s>>;
     fn derive_from_psbt_input<'s>(
         &self,
         psbt_input: &psbt::Input,
@@ -445,15 +450,42 @@ impl DescriptorMeta for ExtendedDescriptor {
         path_found.map(|path| self.as_derived(path, secp))
     }
 
+    fn derive_from_tap_key_origins<'s>(
+        &self,
+        tap_key_origins: &TapKeyOrigins,
+        secp: &'s SecpCtx,
+    ) -> Option<DerivedDescriptor<'s>> {
+        // "Convert" a tap_key_origins map to an hd_keypaths map, by dropping the leaf hash vector and
+        // converting the public key type
+        let hd_keypaths = tap_key_origins
+            .iter()
+            .map(|(pk, (_, keysource))| {
+                let mut data: Vec<u8> = vec![0x02];
+                data.extend(pk.serialize().iter());
+                let pk = secp256k1::PublicKey::from_slice(&data).expect("Invalid XOnlyPublicKey");
+                (pk, keysource.clone())
+            })
+            .collect();
+        self.derive_from_hd_keypaths(&hd_keypaths, secp)
+    }
+
     fn derive_from_psbt_input<'s>(
         &self,
         psbt_input: &psbt::Input,
         utxo: Option<TxOut>,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>> {
-        // TODO: add `derive_from_tap_key_origins`
-        if let Some(derived) = self.derive_from_hd_keypaths(&psbt_input.bip32_derivation, secp) {
-            return Some(derived);
+        if self.is_taproot() {
+            if let Some(derived) =
+                self.derive_from_tap_key_origins(&psbt_input.tap_key_origins, secp)
+            {
+                return Some(derived);
+            }
+        } else {
+            if let Some(derived) = self.derive_from_hd_keypaths(&psbt_input.bip32_derivation, secp)
+            {
+                return Some(derived);
+            }
         }
         if self.is_deriveable() {
             // We can't try to bruteforce the derivation index, exit here
