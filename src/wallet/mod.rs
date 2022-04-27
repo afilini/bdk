@@ -1221,7 +1221,7 @@ where
 
         let derived_descriptor = descriptor.as_derived(index, &self.secp);
 
-        let hd_keypaths = derived_descriptor.get_hd_keypaths(&self.secp)?;
+        let hd_keypaths = derived_descriptor.get_hd_keypaths(&self.secp);
         let script = derived_descriptor.script_pubkey();
 
         for validator in &self.address_validators {
@@ -1432,6 +1432,7 @@ where
                     psbt_input: foreign_psbt_input,
                     outpoint,
                 } => {
+                    // TODO: do not require non_witness_utxo for taproot utxos
                     if !params.only_witness_utxo && foreign_psbt_input.non_witness_utxo.is_none() {
                         return Err(Error::Generic(format!(
                             "Missing non_witness_utxo on foreign utxo {}",
@@ -1457,7 +1458,15 @@ where
                 let (desc, _) = self._get_descriptor_for_keychain(keychain);
                 let derived_descriptor = desc.as_derived(child, &self.secp);
 
-                psbt_output.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp)?;
+                if desc.is_taproot() {
+                    psbt_output
+                        .tap_key_origins
+                        .append(&mut derived_descriptor.get_tap_key_origins(&self.secp));
+                } else {
+                    psbt_output
+                        .bip32_derivation
+                        .append(&mut derived_descriptor.get_hd_keypaths(&self.secp));
+                }
                 if params.include_output_redeem_witness_script {
                     psbt_output.witness_script = derived_descriptor.psbt_witness_script();
                     psbt_output.redeem_script = derived_descriptor.psbt_redeem_script();
@@ -1490,17 +1499,21 @@ where
 
         let desc = self.get_descriptor_for_keychain(keychain);
         let derived_descriptor = desc.as_derived(child, &self.secp);
-        psbt_input.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp)?;
+        if desc.is_taproot() {
+            psbt_input.tap_key_origins = derived_descriptor.get_tap_key_origins(&self.secp);
+        } else {
+            psbt_input.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp);
+        }
 
         psbt_input.redeem_script = derived_descriptor.psbt_redeem_script();
         psbt_input.witness_script = derived_descriptor.psbt_witness_script();
 
         let prev_output = utxo.outpoint;
         if let Some(prev_tx) = self.database.borrow().get_raw_tx(&prev_output.txid)? {
-            if desc.is_witness() {
+            if desc.is_witness() || desc.is_taproot() {
                 psbt_input.witness_utxo = Some(prev_tx.output[prev_output.vout as usize].clone());
             }
-            if !desc.is_witness() || !only_witness_utxo {
+            if !desc.is_taproot() && (!desc.is_witness() || !only_witness_utxo) {
                 psbt_input.non_witness_utxo = Some(prev_tx);
             }
         }
@@ -1526,12 +1539,19 @@ where
                 {
                     debug!("Found descriptor {:?}/{}", keychain, child);
 
-                    // merge hd_keypaths
+                    // merge hd_keypaths or tap_key_origins
                     let desc = self.get_descriptor_for_keychain(keychain);
-                    let mut hd_keypaths = desc
-                        .as_derived(child, &self.secp)
-                        .get_hd_keypaths(&self.secp)?;
-                    psbt_input.bip32_derivation.append(&mut hd_keypaths);
+                    if desc.is_taproot() {
+                        let mut tap_key_origins = desc
+                            .as_derived(child, &self.secp)
+                            .get_tap_key_origins(&self.secp);
+                        psbt_input.tap_key_origins.append(&mut tap_key_origins);
+                    } else {
+                        let mut hd_keypaths = desc
+                            .as_derived(child, &self.secp)
+                            .get_hd_keypaths(&self.secp);
+                        psbt_input.bip32_derivation.append(&mut hd_keypaths);
+                    }
                 }
             }
         }
@@ -1757,6 +1777,10 @@ pub(crate) mod test {
     pub(crate) fn get_test_single_sig_cltv() -> &'static str {
         // and(pk(Alice),after(100000))
         "wsh(and_v(v:pk(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),after(100000)))"
+    }
+
+    pub(crate) fn get_test_tr_single_sig() -> &'static str {
+        "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/*)"
     }
 
     macro_rules! assert_fee_rate {
@@ -4063,6 +4087,19 @@ pub(crate) mod test {
             },
             "when there's no internal descriptor it should just use external"
         );
+    }
+
+    #[test]
+    fn test_taproot_psbt_populate_tap_key_origins() {
+        let (wallet, _, _) = get_funded_wallet(get_test_tr_single_sig());
+        let addr = wallet.get_address(AddressIndex::New).unwrap();
+
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), 25_000);
+        let (psbt, _) = builder.finish().unwrap();
+
+        assert_eq!(psbt.inputs[0].tap_key_origins.len(), 1, "Empty input tap_key_origins");
+        assert_eq!(psbt.outputs[0].tap_key_origins.len(), 1, "Empty output tap_key_origins");
     }
 }
 
