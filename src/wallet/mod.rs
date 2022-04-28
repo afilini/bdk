@@ -24,13 +24,14 @@ use std::sync::Arc;
 use bitcoin::secp256k1::Secp256k1;
 
 use bitcoin::consensus::encode::serialize;
-use bitcoin::util::psbt;
+use bitcoin::util::{psbt, taproot};
 use bitcoin::{
     Address, EcdsaSighashType, Network, OutPoint, Script, Transaction, TxOut, Txid, Witness,
 };
 
 use miniscript::descriptor::DescriptorTrait;
 use miniscript::psbt::PsbtInputSatisfier;
+use miniscript::ToPublicKey;
 
 #[allow(unused_imports)]
 use log::{debug, error, info, trace};
@@ -1436,8 +1437,10 @@ where
                     psbt_input: foreign_psbt_input,
                     outpoint,
                 } => {
-                    // TODO: do not require non_witness_utxo for taproot utxos
-                    if !params.only_witness_utxo && foreign_psbt_input.non_witness_utxo.is_none() {
+                    if foreign_psbt_input.tap_internal_key.is_none()
+                        && !params.only_witness_utxo
+                        && foreign_psbt_input.non_witness_utxo.is_none()
+                    {
                         return Err(Error::Generic(format!(
                             "Missing non_witness_utxo on foreign utxo {}",
                             outpoint
@@ -1462,10 +1465,27 @@ where
                 let (desc, _) = self._get_descriptor_for_keychain(keychain);
                 let derived_descriptor = desc.as_derived(child, &self.secp);
 
-                if desc.is_taproot() {
+                if let miniscript::Descriptor::Tr(tr) = &derived_descriptor {
+                    let tap_tree = if tr.taptree().is_some() {
+                        let mut builder = taproot::TaprootBuilder::new();
+                        for (depth, ms) in tr.iter_scripts() {
+                            let script = ms.encode();
+                            builder = builder.add_leaf(depth, script).expect(
+                                "Computing spend data on a valid Tree should always succeed",
+                            );
+                        }
+                        Some(
+                            psbt::TapTree::from_builder(builder)
+                                .expect("The tree should always be valid"),
+                        )
+                    } else {
+                        None
+                    };
+                    psbt_output.tap_tree = tap_tree;
                     psbt_output
                         .tap_key_origins
                         .append(&mut derived_descriptor.get_tap_key_origins(&self.secp));
+                    psbt_output.tap_internal_key = Some(tr.internal_key().to_x_only_pubkey());
                 } else {
                     psbt_output
                         .bip32_derivation
@@ -1503,8 +1523,22 @@ where
 
         let desc = self.get_descriptor_for_keychain(keychain);
         let derived_descriptor = desc.as_derived(child, &self.secp);
-        if desc.is_taproot() {
+
+        if let miniscript::Descriptor::Tr(tr) = &derived_descriptor {
             psbt_input.tap_key_origins = derived_descriptor.get_tap_key_origins(&self.secp);
+            psbt_input.tap_internal_key = Some(tr.internal_key().to_x_only_pubkey());
+
+            let spend_info = tr.spend_info();
+            psbt_input.tap_merkle_root = spend_info.merkle_root();
+            psbt_input.tap_scripts = spend_info
+                .as_script_map()
+                .keys()
+                .filter_map(|script_ver| {
+                    spend_info
+                        .control_block(script_ver)
+                        .map(|cb| (cb, script_ver.clone()))
+                })
+                .collect();
         } else {
             psbt_input.bip32_derivation = derived_descriptor.get_hd_keypaths(&self.secp);
         }
@@ -1812,6 +1846,10 @@ pub(crate) mod test {
 
     pub(crate) fn get_test_tr_single_sig() -> &'static str {
         "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/*)"
+    }
+
+    pub(crate) fn get_test_tr_with_taptree() -> &'static str {
+        "tr(cPZzKuNmpuUjD1e8jUU4PVzy2b5LngbSip8mBsxf4e7rSFZVb4Uh,{pk(b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55),pk(8aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642)})"
     }
 
     macro_rules! assert_fee_rate {
@@ -4163,6 +4201,37 @@ pub(crate) mod test {
                 (vec![], (from_str!("f6a5cb8b"), from_str!("m/1")))
             )],
             "Wrong output tap_key_origins"
+        );
+    }
+
+    #[test]
+    fn test_taproot_psbt_input_tap_tree() {
+        use bitcoin::hashes::hex::FromHex;
+        use bitcoin::util::taproot;
+
+        let (wallet, _, _) = get_funded_wallet(get_test_tr_with_taptree());
+        let addr = wallet.get_address(AddressIndex::New).unwrap();
+
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), 25_000);
+        let (psbt, _) = builder.finish().unwrap();
+
+        assert_eq!(
+            psbt.inputs[0].tap_merkle_root,
+            Some(
+                FromHex::from_hex(
+                    "d9ca24475ed2c4081ae181d8faa7461649961237bee7bc692f1de448d2d62031"
+                )
+                .unwrap()
+            ),
+        );
+        assert_eq!(
+            psbt.inputs[0].tap_scripts.clone().into_iter().collect::<Vec<_>>(),
+            vec![
+                (taproot::ControlBlock::from_slice(&Vec::<u8>::from_hex("c151494dc22e24a32fe9dcfbd7e85faf345fa1df296fb49d156e859ef3452012958b0afded0ee3149dbf6710d349dc30e55ae30c319c30efbc79efe19cf70f46a8").unwrap()).unwrap(), (from_str!("208aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642ac"), taproot::LeafVersion::TapScript)),
+                (taproot::ControlBlock::from_slice(&Vec::<u8>::from_hex("c151494dc22e24a32fe9dcfbd7e85faf345fa1df296fb49d156e859ef345201295b9a515f7be31a70186e3c5937ee4a70cc4b4e1efe876c1d38e408222ffc64834").unwrap()).unwrap(), (from_str!("20b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55ac"), taproot::LeafVersion::TapScript)),
+            ],
+            "Empty tap_scripts"
         );
     }
 }
