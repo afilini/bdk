@@ -94,7 +94,7 @@ use bitcoin::util::{ecdsa, psbt, schnorr, sighash, taproot};
 use bitcoin::{secp256k1, XOnlyPublicKey};
 use bitcoin::{EcdsaSighashType, PrivateKey, PublicKey, SchnorrSighashType, Script};
 
-use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, KeyMap};
+use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, SinglePubKey, KeyMap};
 use miniscript::{Legacy, MiniscriptKey, Segwitv0, Tap};
 
 use super::utils::SecpCtx;
@@ -258,11 +258,14 @@ impl InputSigner for DescriptorXKey<ExtendedPrivKey> {
             return Ok(());
         }
 
+        let tap_key_origins = psbt.inputs[input_index].tap_key_origins.iter().map(|(pk, (_, keysource))| (SinglePubKey::XOnly(*pk), keysource)).collect::<Vec<_>>();
         let (public_key, full_path) = match psbt.inputs[input_index]
             .bip32_derivation
             .iter()
-            .filter_map(|(pk, &(fingerprint, ref path))| {
-                if self.matches(&(fingerprint, path.clone()), secp).is_some() {
+            .map(|(pk, keysource)| (SinglePubKey::FullKey(PublicKey::new(*pk)), keysource))
+            .chain(tap_key_origins.into_iter())
+            .filter_map(|(pk, keysource @ (_, path))| {
+                if self.matches(&keysource, secp).is_some() {
                     Some((pk, path))
                 } else {
                     None
@@ -285,7 +288,13 @@ impl InputSigner for DescriptorXKey<ExtendedPrivKey> {
             None => self.xkey.derive_priv(secp, &full_path).unwrap(),
         };
 
-        if &secp256k1::PublicKey::from_secret_key(secp, &derived_key.private_key) != public_key {
+        let computed_pk = secp256k1::PublicKey::from_secret_key(secp, &derived_key.private_key);
+        let valid_key = match public_key {
+            SinglePubKey::FullKey(pk) if pk.inner == computed_pk => true,
+            SinglePubKey::XOnly(x_only) if XOnlyPublicKey::from(computed_pk) == x_only => true,
+            _ => false,
+        };
+        if !valid_key {
             Err(SignerError::InvalidKey)
         } else {
             // HD wallets imply compressed keys
@@ -440,7 +449,7 @@ fn produce_schnorr_sig(
             .tap_script_sigs
             .insert((pubkey, lh), final_signature);
     } else {
-        psbt_input.tap_key_sig = Some(final_signature)
+        psbt_input.tap_key_sig = Some(final_signature);
     }
 }
 

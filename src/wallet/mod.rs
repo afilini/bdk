@@ -26,7 +26,7 @@ use bitcoin::secp256k1::Secp256k1;
 use bitcoin::consensus::encode::serialize;
 use bitcoin::util::{psbt, taproot};
 use bitcoin::{
-    Address, EcdsaSighashType, Network, OutPoint, Script, Transaction, TxOut, Txid, Witness,
+    Address, EcdsaSighashType, SchnorrSighashType, Network, OutPoint, Script, Transaction, TxOut, Txid, Witness,
 };
 
 use miniscript::descriptor::DescriptorTrait;
@@ -1009,23 +1009,24 @@ where
         // this helps us doing our job later
         self.add_input_hd_keypaths(psbt)?;
 
-        // If we aren't allowed to use `witness_utxo`, ensure that every input but finalized one
-        // has the `non_witness_utxo`
+        // If we aren't allowed to use `witness_utxo`, ensure that every input (except p2tr and finalized ones)
+        // have the `non_witness_utxo`
         if !sign_options.trust_witness_utxo
             && psbt
                 .inputs
                 .iter()
                 .filter(|i| i.final_script_witness.is_none() && i.final_script_sig.is_none())
+                .filter(|i| i.tap_internal_key.is_none() && i.tap_merkle_root.is_none())
                 .any(|i| i.non_witness_utxo.is_none())
         {
             return Err(Error::Signer(signer::SignerError::MissingNonWitnessUtxo));
         }
 
         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
-        // is using `SIGHASH_ALL`
+        // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for taproot
         if !sign_options.allow_all_sighashes
             && !psbt.inputs.iter().all(|i| {
-                i.sighash_type.is_none() || i.sighash_type == Some(EcdsaSighashType::All.into())
+                i.sighash_type.is_none() || i.sighash_type == Some(EcdsaSighashType::All.into()) || i.sighash_type == Some(SchnorrSighashType::All.into()) || i.sighash_type == Some(SchnorrSighashType::Default.into())
             })
         {
             return Err(Error::Signer(signer::SignerError::NonStandardSighash));
@@ -1818,7 +1819,7 @@ pub(crate) mod test {
     }
 
     pub(crate) fn get_test_tr_with_taptree() -> &'static str {
-        "tr(cPZzKuNmpuUjD1e8jUU4PVzy2b5LngbSip8mBsxf4e7rSFZVb4Uh,{pk(b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55),pk(8aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642)})"
+        "tr(b511bd5771e47ee27558b1765e87b541668304ec567721c7b880edc0a010da55,{pk(cPZzKuNmpuUjD1e8jUU4PVzy2b5LngbSip8mBsxf4e7rSFZVb4Uh),pk(8aee2b8120a5f157f1223f72b5e62b825831a27a9fdf427db7cc697494d4a642)})"
     }
 
     macro_rules! assert_fee_rate {
@@ -4162,6 +4163,33 @@ pub(crate) mod test {
             "Empty input tap_merkle_root"
         );
         assert_eq!(psbt.inputs[0].tap_scripts.len(), 2, "Empty tap_scripts");
+    }
+
+    #[test]
+    fn test_taproot_key_spend() {
+        let (wallet, _, _) = get_funded_wallet(get_test_tr_single_sig());
+        let addr = wallet.get_address(AddressIndex::New).unwrap();
+
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), 25_000);
+        let (mut psbt, _) = builder.finish().unwrap();
+
+        // assert!(wallet.sign(&mut psbt, Default::default()).unwrap(), "Unable to finalize taproot key spend");
+        wallet.sign(&mut psbt, Default::default()).unwrap();
+
+        dbg!(&psbt);
+    }
+
+    #[test]
+    fn test_taproot_script_spend() {
+        let (wallet, _, _) = get_funded_wallet(get_test_tr_with_taptree());
+        let addr = wallet.get_address(AddressIndex::New).unwrap();
+
+        let mut builder = wallet.build_tx();
+        builder.add_recipient(addr.script_pubkey(), 25_000);
+        let (mut psbt, _) = builder.finish().unwrap();
+
+        assert!(wallet.sign(&mut psbt, Default::default()).unwrap(), "Unable to finalize taproot script spend");
     }
 }
 
