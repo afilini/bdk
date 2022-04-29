@@ -17,9 +17,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::ops::Deref;
 
-use bitcoin::{secp256k1, XOnlyPublicKey, PublicKey};
 use bitcoin::util::bip32::{ChildNumber, DerivationPath, ExtendedPubKey, Fingerprint, KeySource};
 use bitcoin::util::{psbt, taproot};
+use bitcoin::{secp256k1, PublicKey, XOnlyPublicKey};
 use bitcoin::{Network, Script, TxOut};
 
 use miniscript::descriptor::{DescriptorType, InnerXKey, SinglePubKey};
@@ -327,7 +327,11 @@ pub(crate) trait DescriptorMeta {
         tap_key_origins: &TapKeyOrigins,
         secp: &'s SecpCtx,
     ) -> Option<DerivedDescriptor<'s>>;
-    fn derive_from_psbt_key_origins<'s>(&self, key_origins: BTreeMap<Fingerprint, (&DerivationPath, SinglePubKey)>, secp: &'s SecpCtx) -> Option<DerivedDescriptor<'s>>;
+    fn derive_from_psbt_key_origins<'s>(
+        &self,
+        key_origins: BTreeMap<Fingerprint, (&DerivationPath, SinglePubKey)>,
+        secp: &'s SecpCtx,
+    ) -> Option<DerivedDescriptor<'s>>;
     fn derive_from_psbt_input<'s>(
         &self,
         psbt_input: &psbt::Input,
@@ -396,10 +400,20 @@ impl DescriptorMeta for ExtendedDescriptor {
         Ok(answer)
     }
 
-    fn derive_from_psbt_key_origins<'s>(&self, key_origins: BTreeMap<Fingerprint, (&DerivationPath, SinglePubKey)>, secp: &'s SecpCtx) -> Option<DerivedDescriptor<'s>> {
+    fn derive_from_psbt_key_origins<'s>(
+        &self,
+        key_origins: BTreeMap<Fingerprint, (&DerivationPath, SinglePubKey)>,
+        secp: &'s SecpCtx,
+    ) -> Option<DerivedDescriptor<'s>> {
         // Ensure that deriving `xpub` with `path` yields `expected`
-        let verify_key = |xpub: &DescriptorXKey<ExtendedPubKey>, path: &DerivationPath, expected: &SinglePubKey| {
-            let derived = xpub.xkey.derive_pub(secp, path).expect("The path should never contain hardened derivation steps").public_key;
+        let verify_key = |xpub: &DescriptorXKey<ExtendedPubKey>,
+                          path: &DerivationPath,
+                          expected: &SinglePubKey| {
+            let derived = xpub
+                .xkey
+                .derive_pub(secp, path)
+                .expect("The path should never contain hardened derivation steps")
+                .public_key;
 
             match expected {
                 SinglePubKey::FullKey(pk) if &PublicKey::new(derived) == pk => true,
@@ -421,10 +435,12 @@ impl DescriptorMeta for ExtendedDescriptor {
                 let derive_path = key_origins
                     .get_key_value(&root_fingerprint)
                     .and_then(|(fingerprint, (path, expected))| {
-                        xpub.matches(&(*fingerprint, (*path).clone()), secp).zip(Some((path, expected)))
+                        xpub.matches(&(*fingerprint, (*path).clone()), secp)
+                            .zip(Some((path, expected)))
                     })
                     .and_then(|(prefix, (full_path, expected))| {
-                        let derive_path = full_path.into_iter()
+                        let derive_path = full_path
+                            .into_iter()
                             .skip(prefix.into_iter().count())
                             .cloned()
                             .collect::<DerivationPath>();
@@ -433,10 +449,18 @@ impl DescriptorMeta for ExtendedDescriptor {
                         // an empty path for fixed descriptors. To verify the key we also need the normal steps
                         // that come before the wildcard, so we take them directly from `xpub` and then append
                         // the final index
-                        if verify_key(xpub, &xpub.derivation_path.extend(derive_path.clone()), expected) {
+                        if verify_key(
+                            xpub,
+                            &xpub.derivation_path.extend(derive_path.clone()),
+                            expected,
+                        ) {
                             Some(derive_path)
                         } else {
-                            log::debug!("Key `{}` derived with {} yields an unexpected key", root_fingerprint, derive_path);
+                            log::debug!(
+                                "Key `{}` derived with {} yields an unexpected key",
+                                root_fingerprint,
+                                derive_path
+                            );
                             None
                         }
                     });
@@ -472,7 +496,10 @@ impl DescriptorMeta for ExtendedDescriptor {
         let key_origins = hd_keypaths
             .iter()
             .map(|(pk, (fingerprint, path))| {
-                (*fingerprint, (path, SinglePubKey::FullKey(PublicKey::new(*pk))))
+                (
+                    *fingerprint,
+                    (path, SinglePubKey::FullKey(PublicKey::new(*pk))),
+                )
             })
             .collect();
         self.derive_from_psbt_key_origins(key_origins, secp)
@@ -486,9 +513,7 @@ impl DescriptorMeta for ExtendedDescriptor {
         // "Convert" a tap_key_origins map to the format required by `derive_from_psbt_key_origins`
         let key_origins = tap_key_origins
             .iter()
-            .map(|(pk, (_, (fingerprint, path)))| {
-                (*fingerprint, (path, SinglePubKey::XOnly(*pk)))
-            })
+            .map(|(pk, (_, (fingerprint, path)))| (*fingerprint, (path, SinglePubKey::XOnly(*pk))))
             .collect();
         self.derive_from_psbt_key_origins(key_origins, secp)
     }

@@ -26,7 +26,8 @@ use bitcoin::secp256k1::Secp256k1;
 use bitcoin::consensus::encode::serialize;
 use bitcoin::util::{psbt, taproot};
 use bitcoin::{
-    Address, EcdsaSighashType, SchnorrSighashType, Network, OutPoint, Script, Transaction, TxOut, Txid, Witness,
+    Address, EcdsaSighashType, Network, OutPoint, SchnorrSighashType, Script, Transaction, TxOut,
+    Txid, Witness,
 };
 
 use miniscript::descriptor::DescriptorTrait;
@@ -1026,7 +1027,10 @@ where
         // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for taproot
         if !sign_options.allow_all_sighashes
             && !psbt.inputs.iter().all(|i| {
-                i.sighash_type.is_none() || i.sighash_type == Some(EcdsaSighashType::All.into()) || i.sighash_type == Some(SchnorrSighashType::All.into()) || i.sighash_type == Some(SchnorrSighashType::Default.into())
+                i.sighash_type.is_none()
+                    || i.sighash_type == Some(EcdsaSighashType::All.into())
+                    || i.sighash_type == Some(SchnorrSighashType::All.into())
+                    || i.sighash_type == Some(SchnorrSighashType::Default.into())
             })
         {
             return Err(Error::Signer(signer::SignerError::NonStandardSighash));
@@ -4189,7 +4193,10 @@ pub(crate) mod test {
         builder.add_recipient(addr.script_pubkey(), 25_000);
         let (mut psbt, _) = builder.finish().unwrap();
 
-        assert!(wallet.sign(&mut psbt, Default::default()).unwrap(), "Unable to finalize taproot script spend");
+        assert!(
+            wallet.sign(&mut psbt, Default::default()).unwrap(),
+            "Unable to finalize taproot script spend"
+        );
     }
 }
 

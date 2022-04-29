@@ -94,7 +94,9 @@ use bitcoin::util::{ecdsa, psbt, schnorr, sighash, taproot};
 use bitcoin::{secp256k1, XOnlyPublicKey};
 use bitcoin::{EcdsaSighashType, PrivateKey, PublicKey, SchnorrSighashType, Script};
 
-use miniscript::descriptor::{DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, SinglePubKey, KeyMap};
+use miniscript::descriptor::{
+    DescriptorSecretKey, DescriptorSinglePriv, DescriptorXKey, KeyMap, SinglePubKey,
+};
 use miniscript::{Legacy, MiniscriptKey, Segwitv0, Tap};
 
 use super::utils::SecpCtx;
@@ -258,7 +260,11 @@ impl InputSigner for DescriptorXKey<ExtendedPrivKey> {
             return Ok(());
         }
 
-        let tap_key_origins = psbt.inputs[input_index].tap_key_origins.iter().map(|(pk, (_, keysource))| (SinglePubKey::XOnly(*pk), keysource)).collect::<Vec<_>>();
+        let tap_key_origins = psbt.inputs[input_index]
+            .tap_key_origins
+            .iter()
+            .map(|(pk, (_, keysource))| (SinglePubKey::XOnly(*pk), keysource))
+            .collect::<Vec<_>>();
         let (public_key, full_path) = match psbt.inputs[input_index]
             .bip32_derivation
             .iter()
