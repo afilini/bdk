@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unpinned tokio to `1`
 - Add traits to reuse `Blockchain`s across multiple wallets (`BlockchainFactory` and `StatelessBlockchain`).
 - Upgrade to rust-bitcoin `0.28` 
+- Update `PkOrF` in the policy module to become an enum
 
 
 ## [v0.18.0] - [v0.17.0]
