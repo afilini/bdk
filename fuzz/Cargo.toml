@@ -1,0 +1,22 @@
+[package]
+name = "fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bdk = { path = "../", default-features = false }
+honggfuzz = "0.5"
+arbitrary = { version = "1", features = ["derive"] }
+
+[workspace]
+
+[[bin]]
+name = "bnb_cs"
+path = "src/bnb_cs.rs"
+
+[[bin]]
+name = "tool_cs_test_to_payload"
+path = "src/tools/cs_test_to_payload.rs"

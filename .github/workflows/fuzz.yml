@@ -1,0 +1,41 @@
+on: [push, pull_request]
+
+name: Fuzz
+
+jobs:
+  fuzz:
+    name: Fuzz targets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        fuzz_target: [ bnb_cs ]
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - uses: actions/cache@v2
+        id: cache-fuzz
+        with:
+          path: |
+            ~/.cargo/bin
+            fuzz/hfuzz_target
+          key: cache-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.toml','**/Cargo.lock') }}
+      - name: Set default toolchain
+        run: rustup default nightly
+      - name: Set profile
+        run: rustup set profile minimal
+      - name: Update toolchain
+        run: rustup update
+      - name: Install dependencies
+        run: sudo apt-get install -y binutils-dev libunwind-dev clang lldb
+      - name: Install honggfuzz
+        continue-on-error: true      # cargo fails if honggfuzz is already installed
+        run: cargo install honggfuzz
+      - run: echo "HFUZZ_RUN_ARGS=--run_time 120 --exit_upon_crash --threads $(nproc) -v" >> $GITHUB_ENV
+      - run: echo "RUSTFLAGS=-Znew-llvm-pass-manager=no" >> $GITHUB_ENV
+      - name: Run fuzz
+        continue-on-error: true
+        run: cd fuzz && cargo hfuzz run ${{ matrix.fuzz_target }}
+      - name: Debug
+        run: cd fuzz && cargo hfuzz run-debug ${{ matrix.fuzz_target }} hfuzz_workspace/${{ matrix.fuzz_target }}/*.fuzz
+      - name: Fail if we had a crash
+        run: exit $(ls -l fuzz/hfuzz_workspace/${{ matrix.fuzz_target }}/*.fuzz | wc -l)
