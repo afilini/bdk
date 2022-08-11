@@ -45,13 +45,14 @@ use bitcoincore_rpc::json::{
     ImportMultiRequestScriptPubkey, ImportMultiRescanSince, ListTransactionResult,
     ListUnspentResultEntry, ScanningDetails,
 };
+use bitcoincore_rpc::jsonrpc::error::RpcError;
 use bitcoincore_rpc::jsonrpc::serde_json::{json, Value};
 use bitcoincore_rpc::jsonrpc::{
     self, simple_http::SimpleHttpTransport, Error as JsonRpcError, Request, Response, Transport,
 };
 use bitcoincore_rpc::Auth as RpcAuth;
 use bitcoincore_rpc::{Client, RpcApi};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -462,16 +463,16 @@ impl<'a, D: BatchDatabase> DbState<'a, D> {
                 .map_or(self.params.start_time, |st| st.block_time.timestamp)
         };
 
-        // sync scriptPubKeys from Database to Core wallet
-        let scripts_iter = self.ext_spks.iter().chain(&self.int_spks);
-        if is_descriptor {
-            import_descriptors(client, start_epoch, scripts_iter)?;
-        } else {
-            import_multi(client, start_epoch, scripts_iter)?;
-        }
-
+        // import scriptPubKeys from Database to Core wallet
         // wait for Core wallet to rescan (TODO: maybe make this async)
-        await_wallet_scan(client, self.params.poll_rate_sec, self.prog)?;
+        while import_waiter(
+            client,
+            is_descriptor,
+            start_epoch,
+            self.params.poll_rate_sec,
+            self.prog,
+            self.ext_spks.iter().chain(&self.int_spks),
+        )? {}
 
         // obtain iterator of pagenated `listtransactions` RPC calls
         const LIST_TX_PAGE_SIZE: usize = 100; // item count per page
@@ -787,6 +788,51 @@ where
         }
     }
     Ok(())
+}
+
+/// On successful import, we also wait until rescan is complete and return `Ok(retry = false)`.
+/// If we cannot import because of an active rescan, we wait for rescan to complete before returning
+/// `Ok(retry = true)`.
+/// Any other error will be returned immediately.
+fn import_waiter<'a, S>(
+    client: &Client,
+    use_descriptor: bool,
+    start_epoch: u64,
+    rate_sec: u64,
+    progress: &dyn Progress,
+    scripts_iter: S,
+) -> Result<bool, Error>
+where
+    S: Iterator<Item = &'a Script>,
+{
+    use bitcoincore_rpc::Error as CoreRpcError;
+
+    let res = match use_descriptor {
+        true => import_descriptors(client, start_epoch, scripts_iter),
+        false => import_multi(client, start_epoch, scripts_iter),
+    };
+
+    match res {
+        Ok(_) => {
+            // import okay: await rescan and return (retry = false)
+            await_wallet_scan(client, rate_sec, progress).map(|_| false)
+        }
+        Err(err) => {
+            if let Error::Rpc(CoreRpcError::JsonRpc(JsonRpcError::Rpc(RpcError {
+                code: -4,
+                message,
+                ..
+            }))) = &err
+            {
+                // wallet still rescanning (-4): await rescan and return (retry = true)
+                warn!("retrying import after rescan: '{}'", message);
+                await_wallet_scan(client, rate_sec, progress).map(|_| true)
+            } else {
+                // other error: return immediately
+                Err(err)
+            }
+        }
+    }
 }
 
 /// Calls the `listtransactions` RPC method in `page_size`s and returns iterator of the tx results
