@@ -11,7 +11,7 @@
 
 use alloc::boxed::Box;
 use core::convert::AsRef;
-use core::ops::Sub;
+use core::ops::{Sub, Add};
 
 use bdk_chain::ConfirmationTime;
 use bitcoin::blockdata::transaction::{OutPoint, Sequence, TxOut};
@@ -49,8 +49,8 @@ impl AsRef<[u8]> for KeychainKind {
 
 /// Fee rate
 #[derive(Debug, Copy, Clone, PartialEq, PartialOrd)]
-// Internally stored as satoshi/vbyte
-pub struct FeeRate(f32);
+// Internally stored as satoshi/kvbyte
+pub struct FeeRate(usize);
 
 impl FeeRate {
     /// Create a new instance checking the value provided
@@ -58,21 +58,26 @@ impl FeeRate {
     /// ## Panics
     ///
     /// Panics if the value is not [normal](https://doc.rust-lang.org/std/primitive.f32.html#method.is_normal) (except if it's a positive zero) or negative.
-    fn new_checked(value: f32) -> Self {
+    fn new_checked_f32(value: f32) -> Self {
         assert!(value.is_normal() || value == 0.0);
         assert!(value.is_sign_positive());
 
-        FeeRate(value)
+        FeeRate((value * 1_000.0) as usize)
+    }
+
+    /// Create a new instance from an integer sats/kvb rate
+    pub fn from_sat_per_kvb(sat_per_kvb: usize) -> Self {
+        FeeRate(sat_per_kvb)
     }
 
     /// Create a new instance of [`FeeRate`] given a float fee rate in sats/kwu
-    pub fn from_sat_per_kwu(sat_per_kwu: f32) -> Self {
-        FeeRate::new_checked(sat_per_kwu / 250.0_f32)
+    pub fn from_sat_per_kwu_f32(sat_per_kwu: f32) -> Self {
+        FeeRate::new_checked_f32(sat_per_kwu / 250.0_f32)
     }
 
     /// Create a new instance of [`FeeRate`] given a float fee rate in sats/kvb
-    pub fn from_sat_per_kvb(sat_per_kvb: f32) -> Self {
-        FeeRate::new_checked(sat_per_kvb / 1000.0_f32)
+    pub fn from_sat_per_kvb_f32(sat_per_kvb: f32) -> Self {
+        FeeRate::new_checked_f32(sat_per_kvb / 1000.0_f32)
     }
 
     /// Create a new instance of [`FeeRate`] given a float fee rate in btc/kvbytes
@@ -81,7 +86,7 @@ impl FeeRate {
     ///
     /// Panics if the value is not [normal](https://doc.rust-lang.org/std/primitive.f32.html#method.is_normal) (except if it's a positive zero) or negative.
     pub fn from_btc_per_kvb(btc_per_kvb: f32) -> Self {
-        FeeRate::new_checked(btc_per_kvb * 1e5)
+        FeeRate::new_checked_f32(btc_per_kvb * 1e5)
     }
 
     /// Create a new instance of [`FeeRate`] given a float fee rate in satoshi/vbyte
@@ -90,12 +95,12 @@ impl FeeRate {
     ///
     /// Panics if the value is not [normal](https://doc.rust-lang.org/std/primitive.f32.html#method.is_normal) (except if it's a positive zero) or negative.
     pub fn from_sat_per_vb(sat_per_vb: f32) -> Self {
-        FeeRate::new_checked(sat_per_vb)
+        FeeRate::new_checked_f32(sat_per_vb)
     }
 
     /// Create a new [`FeeRate`] with the default min relay fee value
     pub const fn default_min_relay_fee() -> Self {
-        FeeRate(1.0)
+        FeeRate(1_000)
     }
 
     /// Calculate fee rate from `fee` and weight units (`wu`).
@@ -110,13 +115,13 @@ impl FeeRate {
     }
 
     /// Return the value as satoshi/vbyte
-    pub fn as_sat_per_vb(&self) -> f32 {
-        self.0
+    pub fn as_sat_per_vb(&self) -> usize {
+        self.0 / 1_000
     }
 
     /// Return the value as satoshi/kwu
-    pub fn sat_per_kwu(&self) -> f32 {
-        self.0 * 250.0_f32
+    pub fn sat_per_kwu(&self) -> usize {
+        self.0 * 250 / 1_000
     }
 
     /// Calculate absolute fee in Satoshis using size in weight units.
@@ -126,7 +131,7 @@ impl FeeRate {
 
     /// Calculate absolute fee in Satoshis using size in virtual bytes.
     pub fn fee_vb(&self, vbytes: usize) -> u64 {
-        (self.as_sat_per_vb() * vbytes as f32).ceil() as u64
+        (self.0 * vbytes / 1_000 + 1) as u64
     }
 }
 
@@ -144,6 +149,14 @@ impl Sub for FeeRate {
     }
 }
 
+impl Add for FeeRate {
+    type Output = Self;
+
+    fn add(self, other: FeeRate) -> Self::Output {
+        FeeRate(self.0 + other.0)
+    }
+}
+
 /// Trait implemented by types that can be used to measure weight units.
 pub trait Vbytes {
     /// Convert weight units to virtual bytes.
@@ -153,7 +166,7 @@ pub trait Vbytes {
 impl Vbytes for usize {
     fn vbytes(self) -> usize {
         // ref: https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki#transaction-size-calculations
-        (self as f32 / 4.0).ceil() as usize
+        self / 4 + 1
     }
 }
 

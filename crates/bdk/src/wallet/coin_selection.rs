@@ -113,6 +113,7 @@ use bitcoin::{Script, Weight};
 
 use core::convert::TryInto;
 use core::fmt::{self, Formatter};
+#[cfg(feature = "std")]
 use rand::seq::SliceRandom;
 
 /// Default coin selection algorithm used by [`TxBuilder`](super::tx_builder::TxBuilder) if not
@@ -456,7 +457,7 @@ impl CoinSelectionAlgorithm for BranchAndBoundCoinSelection {
             .iter()
             .fold(0, |acc, x| acc + x.effective_value);
 
-        let cost_of_change = self.size_of_change as f32 * fee_rate.as_sat_per_vb();
+        let cost_of_change = self.size_of_change * fee_rate.as_sat_per_vb() as u64;
 
         // `curr_value` and `curr_available_value` are both the sum of *effective_values* of
         // the UTXOs. For the optional UTXOs (curr_available_value) we filter out UTXOs with
@@ -547,7 +548,7 @@ impl BranchAndBoundCoinSelection {
         mut curr_value: i64,
         mut curr_available_value: i64,
         target_amount: i64,
-        cost_of_change: f32,
+        cost_of_change: u64,
         drain_script: &Script,
         fee_rate: FeeRate,
     ) -> Result<CoinSelectionResult, Error> {
@@ -663,13 +664,15 @@ impl BranchAndBoundCoinSelection {
     fn single_random_draw(
         &self,
         required_utxos: Vec<OutputGroup>,
-        mut optional_utxos: Vec<OutputGroup>,
+        optional_utxos: Vec<OutputGroup>,
         curr_value: i64,
         target_amount: i64,
         drain_script: &Script,
         fee_rate: FeeRate,
     ) -> CoinSelectionResult {
+        #[cfg(feature = "std")]
         optional_utxos.shuffle(&mut rand::thread_rng());
+
         let selected_utxos = optional_utxos.into_iter().fold(
             (curr_value, vec![]),
             |(mut amount, mut utxos), utxo| {

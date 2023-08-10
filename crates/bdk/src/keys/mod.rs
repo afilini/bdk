@@ -629,6 +629,7 @@ pub trait GeneratableKey<Ctx: ScriptContext>: Sized {
         entropy: Self::Entropy,
     ) -> Result<GeneratedKey<Self, Ctx>, Self::Error>;
 
+    #[cfg(feature = "std")]
     /// Generate a key given the options with a random entropy
     fn generate(options: Self::Options) -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
         use rand::{thread_rng, Rng};
@@ -654,6 +655,7 @@ where
         Self::generate_with_entropy(Default::default(), entropy)
     }
 
+    #[cfg(feature = "std")]
     /// Generate a key with the default options and a random entropy
     fn generate_default() -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
         Self::generate(Default::default())
