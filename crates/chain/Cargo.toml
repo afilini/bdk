@@ -15,7 +15,7 @@ readme = "README.md"
 [dependencies]
 # For no-std, remember to enable the bitcoin/no-std feature
 bitcoin = { version = "0.29", default-features = false }
-serde_crate = { package = "serde", version = "1", optional = true, features = ["derive"] }
+serde_crate = { package = "serde", version = "1", optional = true, features = ["derive"], default-features = false }
 
 # Use hashbrown as a feature flag to have HashSet and HashMap from it.
 # note version 0.13 breaks outs MSRV.

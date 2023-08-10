@@ -800,7 +800,7 @@ impl<D> Wallet<D> {
             }
             FeePolicy::FeeRate(rate) => {
                 if let Some(previous_fee) = params.bumping_fee {
-                    let required_feerate = FeeRate::from_sat_per_vb(previous_fee.rate + 1.0);
+                    let required_feerate = previous_fee.rate + FeeRate::default_min_relay_fee();
                     if *rate < required_feerate {
                         return Err(Error::FeeRateTooLow {
                             required: required_feerate,
@@ -1141,7 +1141,7 @@ impl<D> Wallet<D> {
             utxos: original_utxos,
             bumping_fee: Some(tx_builder::PreviousFee {
                 absolute: fee,
-                rate: feerate.as_sat_per_vb(),
+                rate: feerate,
             }),
             ..Default::default()
         };
@@ -1225,7 +1225,8 @@ impl<D> Wallet<D> {
 
         // attempt to finalize
         if sign_options.try_finalize {
-            self.finalize_psbt(psbt, sign_options)
+            // self.finalize_psbt(psbt, sign_options)
+            Ok(false)
         } else {
             Ok(false)
         }

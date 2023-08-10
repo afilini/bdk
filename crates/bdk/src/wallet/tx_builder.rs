@@ -155,7 +155,7 @@ pub(crate) struct TxParams {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreviousFee {
     pub absolute: u64,
-    pub rate: f32,
+    pub rate: FeeRate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -687,6 +687,7 @@ impl<'a, D> TxBuilder<'a, D, DefaultCoinSelectionAlgorithm, BumpFee> {
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Copy)]
 pub enum TxOrdering {
     /// Randomized (default)
+    #[cfg(feature = "std")]
     Shuffle,
     /// Unchanged
     Untouched,
@@ -695,8 +696,14 @@ pub enum TxOrdering {
 }
 
 impl Default for TxOrdering {
+    #[cfg(feature = "std")]
     fn default() -> Self {
         TxOrdering::Shuffle
+    }
+
+    #[cfg(not(feature = "std"))]
+    fn default() -> Self {
+        TxOrdering::Untouched
     }
 }
 
@@ -705,6 +712,7 @@ impl TxOrdering {
     pub fn sort_tx(&self, tx: &mut Transaction) {
         match self {
             TxOrdering::Untouched => {}
+            #[cfg(feature = "std")]
             TxOrdering::Shuffle => {
                 use rand::seq::SliceRandom;
                 let mut rng = rand::thread_rng();
@@ -801,8 +809,15 @@ mod test {
     use super::*;
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_output_ordering_default_shuffle() {
         assert_eq!(TxOrdering::default(), TxOrdering::Shuffle);
+    }
+
+    #[test]
+    #[cfg(not(feature = "std"))]
+    fn test_output_ordering_default_untouched_no_std() {
+        assert_eq!(TxOrdering::default(), TxOrdering::Untouched);
     }
 
     #[test]
@@ -816,6 +831,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_output_ordering_shuffle() {
         let original_tx = ordering_test_tx!();
         let mut tx = original_tx.clone();

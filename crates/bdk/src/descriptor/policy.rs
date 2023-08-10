@@ -454,6 +454,23 @@ pub struct Condition {
     pub timelock: Option<LockTime>,
 }
 
+#[cfg(not(feature = "std"))]
+/// In no-std environments `HashSet` is just an alias for `BTreeSet`, which means that
+/// we need to implemen `Ord` as well
+impl core::cmp::Ord for Condition {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        match self.partial_cmp(other) {
+            Some(v) => v,
+            None => {
+                match (self.timelock, other.timelock) {
+                    (Some(a), Some(b)) => a.to_consensus_u32().cmp(&b.to_consensus_u32()),
+                    _ => unreachable!(), // This is handled by `partial_cmp()`
+                }
+            }
+        }
+    }
+}
+
 impl Condition {
     fn merge_nlocktime(a: LockTime, b: LockTime) -> Result<LockTime, PolicyError> {
         if !a.is_same_unit(b) {
