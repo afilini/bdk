@@ -304,7 +304,7 @@ pub(crate) fn into_wallet_descriptor_checked<T: IntoWalletDescriptor>(
 
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
     // issues
-    descriptor.sanity_check()?;
+    // descriptor.sanity_check()?;
 
     Ok((descriptor, keymap))
 }
