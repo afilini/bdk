@@ -77,7 +77,7 @@ impl<Ctx: ScriptContext> DerivableKey<Ctx> for Seed {
 impl<Ctx: ScriptContext> DerivableKey<Ctx> for MnemonicWithPassphrase {
     fn into_extended_key(self) -> Result<ExtendedKey<Ctx>, KeyError> {
         let (mnemonic, passphrase) = self;
-        let seed: Seed = mnemonic.to_seed(passphrase.as_deref().unwrap_or(""));
+        let seed: Seed = mnemonic.to_seed_normalized(passphrase.as_deref().unwrap_or(""));
 
         seed.into_extended_key()
     }
