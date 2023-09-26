@@ -244,9 +244,20 @@ impl<D> Wallet<D> {
             None => Arc::new(SignersContainer::new()),
         };
 
-        let changeset = db.load_from_persistence().map_err(NewError::Persist)?;
-        chain.apply_changeset(changeset.chain_changeset);
-        indexed_graph.apply_additions(changeset.indexed_additions);
+        // We use `type_name()` instead of `TypeId` because the latter would introduce a 'static
+        // requirement on the generic type `D`.
+        // `type_name()` doesn't guarantee the returned value is unique, but for this specific purpose
+        // it should be fine (there shouldn't be any way of creating a type that is named `()`, and
+        // if it happens it's very likely it's not accidental).
+        if core::any::type_name::<D>() != core::any::type_name::<()>() {
+            // The `()` db type is provably always empty, so we can safely skip this initialization code.
+            // This saves time but more importantly a decent amount of space in the binary, which really
+            // helps on space-constrained embedded targets.
+
+            let changeset = db.load_from_persistence().map_err(NewError::Persist)?;
+            chain.apply_changeset(changeset.chain_changeset);
+            indexed_graph.apply_additions(changeset.indexed_additions);
+        }
 
         let persist = Persist::new(db);
 
