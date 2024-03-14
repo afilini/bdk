@@ -534,12 +534,23 @@ impl<D> Wallet<D> {
         let indexed_graph = IndexedTxGraph::new(index);
 
         let mut persist = Persist::new(db);
-        persist.stage(ChangeSet {
-            chain: chain_changeset,
-            indexed_tx_graph: indexed_graph.initial_changeset(),
-            network: Some(network),
-        });
-        persist.commit().map_err(NewError::Write)?;
+
+        // We use `type_name()` instead of `TypeId` because the latter would introduce a 'static
+        // requirement on the generic type `D`.
+        // `type_name()` doesn't guarantee the returned value is unique, but for this specific purpose
+        // it should be fine (there shouldn't be any way of creating a type that is named `()`, and
+        // if it happens it's very likely it's not accidental).
+        if core::any::type_name::<D>() != core::any::type_name::<()>() {
+            // The `()` db type is provably always empty, so we can safely skip this initialization code.
+            // This saves time but more importantly a decent amount of space in the binary, which really
+            // helps on space-constrained embedded targets.
+            persist.stage(ChangeSet {
+                chain: chain_changeset,
+                indexed_tx_graph: indexed_graph.initial_changeset(),
+                network: Some(network),
+            });
+            persist.commit().map_err(NewError::Write)?;
+        }
 
         Ok(Wallet {
             signers,
