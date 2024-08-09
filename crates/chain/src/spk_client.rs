@@ -196,7 +196,7 @@ pub struct FullScanRequest<K> {
     /// [`LocalChain::tip`]: crate::local_chain::LocalChain::tip
     pub chain_tip: CheckPoint,
     /// Iterators of script pubkeys indexed by the keychain index.
-    pub spks_by_keychain: BTreeMap<K, Box<dyn Iterator<Item = Indexed<ScriptBuf>> + Send>>,
+    pub spks_by_keychain: BTreeMap<K, Box<dyn Iterator<Item = Indexed<ScriptBuf>>>>,
 }
 
 impl<K: Ord + Clone> FullScanRequest<K> {
@@ -239,7 +239,7 @@ impl<K: Ord + Clone> FullScanRequest<K> {
     pub fn set_spks_for_keychain(
         mut self,
         keychain: K,
-        spks: impl IntoIterator<IntoIter = impl Iterator<Item = Indexed<ScriptBuf>> + Send + 'static>,
+        spks: impl IntoIterator<IntoIter = impl Iterator<Item = Indexed<ScriptBuf>> + 'static>,
     ) -> Self {
         self.spks_by_keychain
             .insert(keychain, Box::new(spks.into_iter()));

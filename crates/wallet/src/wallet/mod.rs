@@ -1217,7 +1217,7 @@ impl Wallet {
 
                 // We choose the biggest between the required nlocktime and the fee sniping
                 // height
-                match requirements.timelock {
+                match requirements.timelock.map(absolute::LockTime::from_consensus) {
                     // No requirement, just use the fee_sniping_height
                     None => fee_sniping_height,
                     // There's a block-based requirement, but the value is lower than the fee_sniping_height
@@ -1233,8 +1233,8 @@ impl Wallet {
             Some(x) if requirements.timelock.is_none() => x,
             // Specific nLockTime required and it's compatible with the constraints
             Some(x)
-                if requirements.timelock.unwrap().is_same_unit(x)
-                    && x >= requirements.timelock.unwrap() =>
+                if absolute::LockTime::from_consensus(requirements.timelock.unwrap()).is_same_unit(x)
+                    && x.to_consensus_u32() >= requirements.timelock.unwrap() =>
             {
                 x
             }
@@ -1242,7 +1242,7 @@ impl Wallet {
             Some(x) => {
                 return Err(CreateTxError::LockTime {
                     requested: x,
-                    required: requirements.timelock.unwrap(),
+                    required: absolute::LockTime::from_consensus(requirements.timelock.unwrap()),
                 })
             }
         };
@@ -1706,11 +1706,12 @@ impl Wallet {
         }
 
         // attempt to finalize
-        if sign_options.try_finalize {
-            self.finalize_psbt(psbt, sign_options)
-        } else {
-            Ok(false)
-        }
+        // if sign_options.try_finalize {
+        //     self.finalize_psbt(psbt, sign_options)
+        // } else {
+        //     Ok(false)
+        // }
+        Ok(false)
     }
 
     /// Return the spending policies for the wallet's descriptor

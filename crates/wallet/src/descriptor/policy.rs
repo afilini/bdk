@@ -446,27 +446,30 @@ pub struct Policy {
 
 /// An extra condition that must be satisfied but that is out of control of the user
 /// TODO: use `bitcoin::LockTime` and `bitcoin::Sequence`
-#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Default, Serialize)]
+#[derive(Hash, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Serialize)]
 pub struct Condition {
     /// Optional CheckSequenceVerify condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csv: Option<Sequence>,
     /// Optional timelock condition
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timelock: Option<absolute::LockTime>,
+    pub timelock: Option<u32>,
 }
 
 impl Condition {
     fn merge_nlocktime(
-        a: absolute::LockTime,
-        b: absolute::LockTime,
-    ) -> Result<absolute::LockTime, PolicyError> {
+        a: u32,
+        b: u32,
+    ) -> Result<u32, PolicyError> {
+        let a = absolute::LockTime::from_consensus(a);
+        let b = absolute::LockTime::from_consensus(b);
+
         if !a.is_same_unit(b) {
             Err(PolicyError::MixedTimelockUnits)
         } else if a > b {
-            Ok(a)
+            Ok(a.to_consensus_u32())
         } else {
-            Ok(b)
+            Ok(b.to_consensus_u32())
         }
     }
 
@@ -716,7 +719,7 @@ impl Policy {
             }
             SatisfiableItem::AbsoluteTimelock { value } => Ok(Condition {
                 csv: None,
-                timelock: Some(*value),
+                timelock: Some(value.to_consensus_u32()),
             }),
             SatisfiableItem::RelativeTimelock { value } => Ok(Condition {
                 csv: Some((*value).into()),
@@ -922,7 +925,7 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
                 .into();
                 policy.contribution = Satisfaction::Complete {
                     condition: Condition {
-                        timelock: Some((*value).into()),
+                        timelock: Some(value.to_consensus_u32()),
                         csv: None,
                     },
                 };

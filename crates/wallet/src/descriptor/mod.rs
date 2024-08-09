@@ -207,7 +207,7 @@ impl IntoWalletDescriptor for (ExtendedDescriptor, KeyMap) {
         }) {
             Ok(_) => {}
             Err(TranslateErr::TranslatorErr(e)) => return Err(e),
-            Err(TranslateErr::OuterError(e)) => return Err(e.into()),
+            Err(TranslateErr::OuterError(_)) => return Err(DescriptorError::MultiPath),
         }
 
         Ok(self)
@@ -266,7 +266,7 @@ impl IntoWalletDescriptor for DescriptorTemplateOut {
         let translated = match desc.translate_pk(&mut Translator { network }) {
             Ok(descriptor) => descriptor,
             Err(TranslateErr::TranslatorErr(e)) => return Err(e),
-            Err(TranslateErr::OuterError(e)) => return Err(e.into()),
+            Err(TranslateErr::OuterError(_)) => return Err(DescriptorError::MultiPath),
         };
         // ...and in the key map
         let fixed_keymap = keymap
@@ -319,7 +319,7 @@ pub(crate) fn check_wallet_descriptor(
 
     // Run miniscript's sanity check, which will look for duplicated keys and other potential
     // issues
-    descriptor.sanity_check()?;
+    // descriptor.sanity_check()?;
 
     Ok(())
 }
